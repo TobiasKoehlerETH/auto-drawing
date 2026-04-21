@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="360" viewBox="0 0 960 360">
+  <rect width="960" height="360" fill="#f8fafc"/>
+  <text x="60" y="48" font-family="Arial, sans-serif" font-size="28" fill="#111827">Feature control frame anatomy</text>
+  <rect x="120" y="140" width="620" height="70" fill="#fff" stroke="#111827" stroke-width="3"/>
+  <line x1="210" y1="140" x2="210" y2="210" stroke="#111827" stroke-width="3"/>
+  <line x1="350" y1="140" x2="350" y2="210" stroke="#111827" stroke-width="3"/>
+  <line x1="450" y1="140" x2="450" y2="210" stroke="#111827" stroke-width="3"/>
+  <line x1="540" y1="140" x2="540" y2="210" stroke="#111827" stroke-width="3"/>
+  <line x1="630" y1="140" x2="630" y2="210" stroke="#111827" stroke-width="3"/>
+  <text x="150" y="185" font-family="Arial, sans-serif" font-size="34" fill="#111827">⌖</text>
+  <text x="255" y="185" font-family="Arial, sans-serif" font-size="28" fill="#111827">Ø0.10</text>
+  <text x="388" y="185" font-family="Arial, sans-serif" font-size="28" fill="#111827">Ⓜ</text>
+  <text x="490" y="185" font-family="Arial, sans-serif" font-size="28" fill="#111827">A</text>
+  <text x="574" y="185" font-family="Arial, sans-serif" font-size="28" fill="#111827">B</text>
+  <text x="665" y="185" font-family="Arial, sans-serif" font-size="28" fill="#111827">C</text>
+  <text x="135" y="240" font-family="Arial, sans-serif" font-size="18" fill="#374151">characteristic</text>
+  <text x="252" y="240" font-family="Arial, sans-serif" font-size="18" fill="#374151">zone size / shape</text>
+  <text x="360" y="240" font-family="Arial, sans-serif" font-size="18" fill="#374151">modifier</text>
+  <text x="490" y="240" font-family="Arial, sans-serif" font-size="18" fill="#374151">primary datum</text>
+  <text x="566" y="240" font-family="Arial, sans-serif" font-size="18" fill="#374151">secondary</text>
+  <text x="658" y="240" font-family="Arial, sans-serif" font-size="18" fill="#374151">tertiary</text>
+</svg>

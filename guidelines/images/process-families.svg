@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="430" viewBox="0 0 960 430">
+  <rect width="960" height="430" fill="#f7f7fb"/>
+  <text x="60" y="48" font-family="Arial, sans-serif" font-size="28" fill="#111827">Process families</text>
+  <rect x="70" y="90" width="180" height="70" rx="14" fill="#dbeafe"/>
+  <rect x="280" y="90" width="180" height="70" rx="14" fill="#dcfce7"/>
+  <rect x="490" y="90" width="180" height="70" rx="14" fill="#fee2e2"/>
+  <rect x="700" y="90" width="180" height="70" rx="14" fill="#fef3c7"/>
+  <rect x="70" y="210" width="180" height="70" rx="14" fill="#e9d5ff"/>
+  <rect x="280" y="210" width="180" height="70" rx="14" fill="#fde68a"/>
+  <rect x="490" y="210" width="180" height="70" rx="14" fill="#bfdbfe"/>
+  <rect x="700" y="210" width="180" height="70" rx="14" fill="#d1fae5"/>
+  <text x="115" y="132" font-family="Arial, sans-serif" font-size="20" fill="#111827">primary shaping</text>
+  <text x="338" y="132" font-family="Arial, sans-serif" font-size="20" fill="#111827">forming</text>
+  <text x="548" y="132" font-family="Arial, sans-serif" font-size="20" fill="#111827">machining</text>
+  <text x="758" y="132" font-family="Arial, sans-serif" font-size="20" fill="#111827">joining</text>
+  <text x="95" y="252" font-family="Arial, sans-serif" font-size="20" fill="#111827">heat treatment</text>
+  <text x="315" y="252" font-family="Arial, sans-serif" font-size="20" fill="#111827">surface treatment</text>
+  <text x="546" y="252" font-family="Arial, sans-serif" font-size="20" fill="#111827">finishing</text>
+  <text x="728" y="252" font-family="Arial, sans-serif" font-size="20" fill="#111827">inspection / test</text>
+  <text x="72" y="332" font-family="Arial, sans-serif" font-size="18" fill="#374151">Use one process note per bullet with the target result.</text>
+</svg>

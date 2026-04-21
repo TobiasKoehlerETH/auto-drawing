@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="420" viewBox="0 0 960 420">
+  <rect width="960" height="420" fill="#fffdf7"/>
+  <text x="60" y="48" font-family="Arial, sans-serif" font-size="28" fill="#111827">Edges and note precedence</text>
+  <polygon points="120,110 240,110 240,220 180,220 120,160" fill="#e5e7eb" stroke="#111827" stroke-width="2"/>
+  <line x1="240" y1="110" x2="315" y2="85" stroke="#b45309" stroke-width="3"/>
+  <text x="325" y="90" font-family="Arial, sans-serif" font-size="20" fill="#92400e">C1.0 × 45°</text>
+  <line x1="240" y1="220" x2="315" y2="250" stroke="#2563eb" stroke-width="3"/>
+  <text x="325" y="258" font-family="Arial, sans-serif" font-size="20" fill="#1d4ed8">R0.5</text>
+  <rect x="520" y="100" width="320" height="210" rx="16" fill="#fff" stroke="#16a34a" stroke-width="3"/>
+  <text x="550" y="140" font-family="Arial, sans-serif" font-size="22" fill="#166534">NOTES</text>
+  <text x="550" y="180" font-family="Arial, sans-serif" font-size="18" fill="#111827">1. U.O.S. break edges 0.2-0.5</text>
+  <text x="550" y="212" font-family="Arial, sans-serif" font-size="18" fill="#111827">2. U.O.S. surface finish Ra 3.2</text>
+  <text x="550" y="244" font-family="Arial, sans-serif" font-size="18" fill="#111827">3. THIS FACE ONLY: Ra 0.8</text>
+  <text x="550" y="290" font-family="Arial, sans-serif" font-size="18" fill="#166534">local note overrides general note</text>
+</svg>

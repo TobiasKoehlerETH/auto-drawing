@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="420" viewBox="0 0 960 420">
+  <rect width="960" height="420" fill="#f9fafb"/>
+  <text x="60" y="48" font-family="Arial, sans-serif" font-size="28" fill="#111827">Tolerance styles</text>
+  <rect x="70" y="90" width="380" height="250" rx="16" fill="#fff" stroke="#2563eb" stroke-width="3"/>
+  <rect x="510" y="90" width="380" height="250" rx="16" fill="#fff" stroke="#16a34a" stroke-width="3"/>
+  <text x="102" y="128" font-family="Arial, sans-serif" font-size="22" fill="#1d4ed8">Numeric styles</text>
+  <text x="540" y="128" font-family="Arial, sans-serif" font-size="22" fill="#166534">Fit system</text>
+  <text x="100" y="170" font-family="Arial, sans-serif" font-size="20" fill="#111827">10 ±0.2</text>
+  <text x="100" y="205" font-family="Arial, sans-serif" font-size="20" fill="#111827">10 +0.2 / -0.0</text>
+  <text x="100" y="240" font-family="Arial, sans-serif" font-size="20" fill="#111827">9.8 - 10.2</text>
+  <text x="100" y="275" font-family="Arial, sans-serif" font-size="20" fill="#111827">R3 MAX</text>
+  <rect x="100" y="292" width="70" height="30" fill="#eef2ff" stroke="#4338ca" stroke-width="2"/>
+  <text x="112" y="314" font-family="Arial, sans-serif" font-size="18" fill="#312e81">75</text>
+  <text x="190" y="314" font-family="Arial, sans-serif" font-size="18" fill="#111827">basic dimension</text>
+  <text x="540" y="175" font-family="Arial, sans-serif" font-size="26" fill="#111827">Ø12 H7 / g6</text>
+  <line x1="560" y1="205" x2="840" y2="205" stroke="#6b7280" stroke-width="2"/>
+  <rect x="620" y="180" width="80" height="25" fill="#bfdbfe"/>
+  <rect x="710" y="210" width="70" height="25" fill="#bbf7d0"/>
+  <text x="620" y="250" font-family="Arial, sans-serif" font-size="18" fill="#1f2937">hole zone above nominal</text>
+  <text x="620" y="278" font-family="Arial, sans-serif" font-size="18" fill="#1f2937">shaft zone below nominal</text>
+  <text x="540" y="314" font-family="Arial, sans-serif" font-size="18" fill="#1f2937">clearance, transition, and interference are determined</text>
+  <text x="540" y="338" font-family="Arial, sans-serif" font-size="18" fill="#1f2937">from the limits, not only from the nominal size.</text>
+</svg>

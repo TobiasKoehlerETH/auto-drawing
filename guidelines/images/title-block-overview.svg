@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="560" viewBox="0 0 960 560">
+  <rect width="960" height="560" fill="#f7f3ea"/>
+  <rect x="60" y="40" width="840" height="460" fill="#fffdf8" stroke="#1f2937" stroke-width="3"/>
+  <rect x="80" y="60" width="800" height="420" fill="none" stroke="#6b7280" stroke-width="2"/>
+  <line x1="160" y1="60" x2="160" y2="480" stroke="#9ca3af" stroke-width="2"/>
+  <line x1="480" y1="60" x2="480" y2="480" stroke="#d1d5db" stroke-width="2" stroke-dasharray="8 6"/>
+  <line x1="80" y1="270" x2="880" y2="270" stroke="#d1d5db" stroke-width="2" stroke-dasharray="8 6"/>
+  <rect x="560" y="360" width="280" height="100" fill="#e6f2ff" stroke="#2563eb" stroke-width="3"/>
+  <line x1="560" y1="392" x2="840" y2="392" stroke="#2563eb" stroke-width="2"/>
+  <line x1="560" y1="424" x2="840" y2="424" stroke="#2563eb" stroke-width="2"/>
+  <line x1="680" y1="360" x2="680" y2="460" stroke="#2563eb" stroke-width="2"/>
+  <text x="62" y="26" font-family="Arial, sans-serif" font-size="24" fill="#111827">Sheet frame with title block</text>
+  <text x="585" y="382" font-family="Arial, sans-serif" font-size="18" fill="#111827">TITLE / DWG NO.</text>
+  <text x="585" y="414" font-family="Arial, sans-serif" font-size="18" fill="#111827">UNITS / SCALE</text>
+  <text x="585" y="446" font-family="Arial, sans-serif" font-size="18" fill="#111827">MATL / REV / SHEET</text>
+  <text x="115" y="104" font-family="Arial, sans-serif" font-size="18" fill="#111827">Left filing margin</text>
+  <text x="335" y="170" font-family="Arial, sans-serif" font-size="18" fill="#111827">Main drawing field</text>
+  <circle cx="480" cy="60" r="6" fill="#ef4444"/>
+  <circle cx="480" cy="480" r="6" fill="#ef4444"/>
+  <circle cx="80" cy="270" r="6" fill="#ef4444"/>
+  <circle cx="880" cy="270" r="6" fill="#ef4444"/>
+  <text x="498" y="68" font-family="Arial, sans-serif" font-size="16" fill="#991b1b">centering mark</text>
+  <text x="685" y="340" font-family="Arial, sans-serif" font-size="18" fill="#1d4ed8">bottom-right placement</text>
+</svg>

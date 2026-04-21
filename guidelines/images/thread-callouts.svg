@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="420" viewBox="0 0 960 420">
+  <rect width="960" height="420" fill="#f8fafc"/>
+  <text x="60" y="48" font-family="Arial, sans-serif" font-size="28" fill="#111827">Thread callout examples</text>
+  <rect x="70" y="90" width="380" height="260" rx="16" fill="#fff" stroke="#2563eb" stroke-width="3"/>
+  <rect x="510" y="90" width="380" height="260" rx="16" fill="#fff" stroke="#b45309" stroke-width="3"/>
+  <text x="105" y="130" font-family="Arial, sans-serif" font-size="24" fill="#1d4ed8">Metric / Unified</text>
+  <text x="545" y="130" font-family="Arial, sans-serif" font-size="24" fill="#92400e">Pipe / special</text>
+  <text x="105" y="175" font-family="Arial, sans-serif" font-size="20" fill="#111827">M10×1.5-6H</text>
+  <text x="105" y="210" font-family="Arial, sans-serif" font-size="20" fill="#111827">M20×2-6g LH</text>
+  <text x="105" y="245" font-family="Arial, sans-serif" font-size="20" fill="#111827">3/8-24 UNF-2A</text>
+  <text x="105" y="280" font-family="Arial, sans-serif" font-size="20" fill="#111827">1/4-20 UNC-2B THRU</text>
+  <text x="545" y="175" font-family="Arial, sans-serif" font-size="20" fill="#111827">1/8-27 NPTF</text>
+  <text x="545" y="210" font-family="Arial, sans-serif" font-size="20" fill="#111827">G 1/4</text>
+  <text x="545" y="245" font-family="Arial, sans-serif" font-size="20" fill="#111827">R 1/4</text>
+  <text x="545" y="280" font-family="Arial, sans-serif" font-size="20" fill="#111827">Tr20×4</text>
+  <text x="105" y="322" font-family="Arial, sans-serif" font-size="18" fill="#374151">H / B = internal, g / A = external</text>
+  <text x="545" y="322" font-family="Arial, sans-serif" font-size="18" fill="#374151">pipe family sets sealing behavior</text>
+</svg>

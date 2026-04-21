@@ -1,0 +1,8 @@
+[08:35:48] main:connect_solidworks
+[08:35:48] main:connected
+[08:35:48] prepare_output_paths:start
+[08:35:49] prepare_output_paths:done
+[08:35:49] working_part_copy=C:\Code\auto-drawing\.generated\guideline_drawing\sample_guideline_attempt.source.SLDPRT
+[08:35:49] main:open_part
+[08:35:49] main:cleanup
+[08:35:49] main:cleanup_done
