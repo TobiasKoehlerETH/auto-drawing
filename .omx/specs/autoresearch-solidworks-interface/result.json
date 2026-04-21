@@ -1,9 +1,0 @@
-{
-  "validation_mode": "prompt-architect-artifact",
-  "validator_prompt": "Review the SolidWorks interface evaluation for evidence quality. Approve only if it distinguishes verified behavior from README claims, includes live drawing-tool test results, and ends with a practical recommendation for a future agent-facing interface.",
-  "architect_review": {
-    "verdict": "approved",
-    "summary": "The findings distinguish live-tested SolidWorks behavior from README-only claims, include concrete drawing creation/export evidence on the sample part, and end with a practical hybrid recommendation for a future agent-facing interface."
-  },
-  "output_artifact_path": "C:\\Code\\auto-drawing\\SOLIDWORKS_INTERFACE_FINDINGS.md"
-}
