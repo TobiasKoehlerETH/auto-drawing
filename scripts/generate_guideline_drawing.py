@@ -14,11 +14,8 @@ if str(SKILL_SCRIPTS) not in sys.path:
 
 from sw_connect import (  # noqa: E402
     connect_solidworks,
-    create_empty_dispatch_variant,
     get_com_member,
     new_document,
-    open_document,
-    save_document,
 )
 
 
@@ -160,6 +157,53 @@ def export_preview_png(model, output_path: Path) -> bool:
     return bool(success)
 
 
+def create_empty_dispatch_variant():
+    return VARIANT(pythoncom.VT_DISPATCH, None)
+
+
+def open_document_safe(sw, file_path: str, read_only: bool = False):
+    ext = Path(file_path).suffix.lower()
+    type_map = {".sldprt": 1, ".sldasm": 2, ".slddrw": 3, ".step": 1, ".stp": 1, ".igs": 1, ".iges": 1}
+    doc_type = type_map.get(ext, 1)
+    options = 2 if read_only else 0
+    model, errors, warnings = sw.OpenDoc6(file_path, doc_type, options, "", 0, 0)
+    if model:
+        print(f"open_document=True path={Path(file_path).name} errors={errors} warnings={warnings}")
+    else:
+        print(f"open_document=False path={Path(file_path).name} errors={errors} warnings={warnings}")
+    return model
+
+
+def save_document_safe(model, file_path: str | None = None) -> bool:
+    current_path = get_com_member(model, "GetPathName")
+
+    if file_path and current_path and Path(current_path) == Path(file_path):
+        success, errors, warnings = model.Save3(1, 0, 0)
+        error_code = errors
+        warning_code = warnings
+    elif file_path:
+        errors = VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
+        warnings = VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
+        success = model.Extension.SaveAs(
+            file_path,
+            0,
+            1,
+            create_empty_dispatch_variant(),
+            errors,
+            warnings,
+        )
+        error_code = errors.value
+        warning_code = warnings.value
+    else:
+        success, errors, warnings = model.Save3(1, 0, 0)
+        error_code = errors
+        warning_code = warnings
+
+    target = file_path or current_path
+    print(f"save_document={bool(success)} path={target} errors={error_code} warnings={warning_code}")
+    return bool(success)
+
+
 def open_or_create_drawing(sw):
     trace("open_or_create_drawing:start")
     close_document_variants(sw, DRAWING_PATH)
@@ -169,7 +213,7 @@ def open_or_create_drawing(sw):
         remove_existing_output(DRAWING_PATH)
         trace("open_or_create_drawing:removed_existing_output")
     elif DRAWING_PATH.exists():
-        drawing_model = open_document(sw, str(DRAWING_PATH), read_only=False)
+        drawing_model = open_document_safe(sw, str(DRAWING_PATH), read_only=False)
         if drawing_model is not None:
             trace("open_or_create_drawing:opened_existing")
             print("created_new_drawing=False")
@@ -792,13 +836,13 @@ def main() -> None:
         working_part_path = recreate_working_part_copy(sw)
 
         trace("main:open_part")
-        part_model = open_document(sw, str(working_part_path), read_only=False)
+        part_model = open_document_safe(sw, str(working_part_path), read_only=False)
         trace(f"main:open_part_done success={part_model is not None}")
         print(f"open_part={part_model is not None}")
         trace("main:dimxpert_auto_dimension")
         try_dimxpert_auto_dimension(part_model)
         trace("main:save_working_part")
-        save_part_ok = save_document(part_model, str(working_part_path))
+        save_part_ok = save_document_safe(part_model, str(working_part_path))
         print(f"save_working_part={save_part_ok}")
 
         trace("main:set_background")
@@ -830,7 +874,7 @@ def main() -> None:
         drawing_model.ViewZoomtofit2()
 
         trace("main:save_drawing")
-        save_ok = save_document(drawing_model, str(DRAWING_PATH))
+        save_ok = save_document_safe(drawing_model, str(DRAWING_PATH))
         trace(f"main:save_drawing_done success={save_ok}")
         print(f"save_drawing={save_ok}")
         trace("main:export_pdf")

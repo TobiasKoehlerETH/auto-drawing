@@ -1,8 +1,41 @@
-[08:35:48] main:connect_solidworks
-[08:35:48] main:connected
-[08:35:48] prepare_output_paths:start
-[08:35:49] prepare_output_paths:done
-[08:35:49] working_part_copy=C:\Code\auto-drawing\.generated\guideline_drawing\sample_guideline_attempt.source.SLDPRT
-[08:35:49] main:open_part
-[08:35:49] main:cleanup
-[08:35:49] main:cleanup_done
+[08:40:34] main:connect_solidworks
+[08:40:34] main:connected
+[08:40:34] prepare_output_paths:start
+[08:40:36] prepare_output_paths:done
+[08:40:36] working_part_copy=C:\Code\auto-drawing\.generated\guideline_drawing\sample_guideline_attempt.source.SLDPRT
+[08:40:36] main:open_part
+[08:40:41] main:open_part_done success=True
+[08:40:41] main:dimxpert_auto_dimension
+[08:40:41] dimxpert:schema=Scheme2
+[08:40:43] dimxpert:auto_dimension_failed label=all_features filters=65535 scope_all=True error=(-2147417851, 'The server threw an exception.', None, None)
+[08:40:43] dimxpert:annotation_count total=0 dimxpert=0
+[08:40:43] main:save_working_part
+[08:40:43] main:set_background
+[08:40:43] open_or_create_drawing:start
+[08:40:46] open_or_create_drawing:done
+[08:40:46] main:set_sheet
+[08:40:49] main:set_units
+[08:40:49] main:set_dimension_preferences
+[08:40:49] main:ensure_views
+[08:40:52] main:title_block
+[08:40:52] main:notes
+[08:40:52] main:auto_dimension
+[08:40:53] insert_marked_dimensions=None
+[08:40:53] insert_all_dimension_annotations=None
+[08:40:54] auto_dimension view=Drawing View1 result=1 before=0 after=2
+[08:40:54] auto_dimension view=Drawing View2 result=1 before=0 after=2
+[08:40:55] auto_dimension view=Drawing View3 result=1 before=0 after=2
+[08:40:55] main:rebuild
+[08:40:56] main:normalize_dimensions
+[08:40:58] main:save_drawing
+[08:41:00] main:save_drawing_done success=True
+[08:41:00] main:export_pdf
+[08:41:00] export_pdf:start
+[08:41:08] export_pdf:done success=True errors=0 warnings=0
+[08:41:08] main:export_pdf_done success=True
+[08:41:08] main:export_preview_png
+[08:41:08] export_preview_png:start
+[08:41:09] export_preview_png:done success=True errors=0 warnings=0
+[08:41:09] main:export_preview_png_done success=True
+[08:41:09] main:cleanup
+[08:41:12] main:cleanup_done
