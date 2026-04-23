@@ -1,0 +1,102 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "IBM Plex Sans", "Segoe UI", sans-serif;
+}
+
+@layer base {
+  * {
+    box-sizing: border-box;
+  }
+
+  html {
+    font-family: var(--font-sans);
+    color: rgb(15 23 42);
+    background: rgb(255 255 255);
+  }
+
+  body {
+    margin: 0;
+  }
+
+  button,
+  input,
+  select {
+    font: inherit;
+  }
+}
+
+@layer components {
+  .drawing-canvas-svg {
+    display: block;
+    background: white;
+  }
+
+  .drawing-canvas-svg path,
+  .drawing-canvas-svg rect,
+  .drawing-canvas-svg circle,
+  .drawing-canvas-svg line {
+    vector-effect: non-scaling-stroke;
+  }
+
+  .drawing-canvas-svg .sheet-frame,
+  .drawing-canvas-svg .title-block,
+  .drawing-canvas-svg .title-block-grid,
+  .drawing-canvas-svg .projection-symbol {
+    stroke: #0f172a;
+    fill: none;
+  }
+
+  .drawing-canvas-svg .view-front,
+  .drawing-canvas-svg .view-top,
+  .drawing-canvas-svg .view-right,
+  .drawing-canvas-svg .view-isometric {
+    stroke: #0f172a;
+    fill: none;
+    stroke-width: 0.55;
+  }
+
+  .drawing-canvas-svg .view-isometric-shaded-face {
+    stroke: none;
+    fill: #d9e0ea;
+    opacity: 0.88;
+  }
+
+  .drawing-canvas-svg .iso-face-top {
+    fill: #eef2f7;
+  }
+
+  .drawing-canvas-svg .iso-face-front {
+    fill: #d8e0eb;
+  }
+
+  .drawing-canvas-svg .iso-face-right {
+    fill: #c3cedc;
+  }
+
+  .drawing-canvas-svg .hidden {
+    stroke: #0f172a;
+    fill: none;
+    stroke-dasharray: 3 2;
+    opacity: 0.72;
+  }
+
+  .drawing-canvas-svg .centerline {
+    stroke: #334155;
+    fill: none;
+    stroke-dasharray: 10 3 2 3;
+  }
+
+  .drawing-canvas-svg .smooth {
+    stroke: #0f172a;
+  }
+
+  .drawing-canvas-svg .view-label,
+  .drawing-canvas-svg .note,
+  .drawing-canvas-svg .title-block-field {
+    fill: #122033;
+    stroke: none;
+    font-size: 4px;
+    user-select: none;
+  }
+}

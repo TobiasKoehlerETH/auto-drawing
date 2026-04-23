@@ -2,5 +2,11 @@ SolidworksMCP-TS/
 SolidworksMCP-python/
 solidworks-mcp/
 swapi-pilot-solidworks-mcp/
+frontend/node_modules/
+frontend/dist/
+frontend/*.tsbuildinfo
+__pycache__/
+*.pyc
+.generated-*.log
 ~$*
 .*/

@@ -6,7 +6,7 @@ Every item is a binary PASS / FAIL with visible evidence.
 
 ---
 
-## A. Sheet & Title Block — [guideline 00](00-sheet-and-title-block.md)
+## A. Sheet & Title Block - [guideline 00](00-sheet-and-title-block.md)
 
 - [ ] A.1 Sheet size matches declared size.
 - [ ] A.2 Border and filing margin are present.
@@ -17,7 +17,7 @@ Every item is a binary PASS / FAIL with visible evidence.
 - [ ] A.7 Projection symbol is present and matches the layout.
 - [ ] A.8 No text or model lines overlap the title block.
 
-## B. Lines — [guideline 01](01-lines-and-weights.md)
+## B. Lines - [guideline 01](01-lines-and-weights.md)
 
 - [ ] B.1 Visible edges are thicker than hidden and centre lines.
 - [ ] B.2 Hidden lines are dashed thin.
@@ -25,7 +25,7 @@ Every item is a binary PASS / FAIL with visible evidence.
 - [ ] B.4 Cutting plane lines are visually distinct.
 - [ ] B.5 Dimension, extension, leader, and hatching lines are thin.
 
-## C. Views & Projection — [guideline 02](02-views-and-projection.md)
+## C. Views & Projection - [guideline 02](02-views-and-projection.md)
 
 - [ ] C.1 Front view shows the functional orientation.
 - [ ] C.2 Views follow the declared first-angle or third-angle layout.
@@ -36,7 +36,7 @@ Every item is a binary PASS / FAIL with visible evidence.
 - [ ] C.7 The isometric view is compact, bottom-right, shaded with edges, and scaled `1:2`.
 - [ ] C.8 Only the isometric recognition view is shaded / colored; orthographic views are not.
 
-## D. Sections / Details / Auxiliaries — [guideline 03](03-section-detail-broken-auxiliary.md)
+## D. Sections / Details / Auxiliaries - [guideline 03](03-section-detail-broken-auxiliary.md)
 
 - [ ] D.1 Section views have labelled cutting planes.
 - [ ] D.2 Hatching is consistent and readable.
@@ -44,7 +44,7 @@ Every item is a binary PASS / FAIL with visible evidence.
 - [ ] D.4 Detail views show the parent location and scale.
 - [ ] D.5 Broken or auxiliary views are clearly identified.
 
-## E. Dimensioning — [guideline 04](04-dimensioning.md)
+## E. Dimensioning - [guideline 04](04-dimensioning.md)
 
 - [ ] E.1 Every essential dimension appears once.
 - [ ] E.2 Extension and dimension lines are drawn cleanly.
@@ -56,8 +56,9 @@ Every item is a binary PASS / FAIL with visible evidence.
 - [ ] E.8 Repeated features use `2×`, `4×`, `TYP`, or similar multiplicity.
 - [ ] E.9 Dimension values are not shown in brackets or parentheses.
 - [ ] E.10 Dimension lines, leaders, and value text do not overlap each other.
+- [ ] E.11 No controlling dimension appears more than once on the sheet.
 
-## F. Tolerances & Fits — [guideline 05](05-tolerances-general-and-fits.md)
+## F. Tolerances & Fits - [guideline 05](05-tolerances-general-and-fits.md)
 
 - [ ] F.1 Title block declares a general-tolerance class such as `ISO 2768-mK`.
 - [ ] F.2 Fit callouts use correct case: uppercase for holes, lowercase for shafts.
@@ -65,7 +66,7 @@ Every item is a binary PASS / FAIL with visible evidence.
 - [ ] F.4 Reference dimensions are clearly non-controlling.
 - [ ] F.5 Basic dimensions are boxed and paired with GD&T where required.
 
-## G. GD&T — [guideline 06](06-gdt.md)
+## G. GD&T - [guideline 06](06-gdt.md)
 
 - [ ] G.1 Title block declares `ISO 8015` when GD&T is used.
 - [ ] G.2 Feature control frames read left-to-right with symbol, value, modifier, and datums.
@@ -73,7 +74,7 @@ Every item is a binary PASS / FAIL with visible evidence.
 - [ ] G.4 `Ⓜ` or `Ⓛ` is placed after the tolerance value when used.
 - [ ] G.5 `Ø` is shown only for cylindrical or spherical zones.
 
-## H. Surface Texture — [guideline 07](07-surface-texture.md)
+## H. Surface Texture - [guideline 07](07-surface-texture.md)
 
 - [ ] H.1 Surface symbols use parameter + value notation.
 - [ ] H.2 The parameter name is explicit (`Ra`, `Rz`, etc.).
@@ -81,13 +82,13 @@ Every item is a binary PASS / FAIL with visible evidence.
 - [ ] H.4 Bar and circle variants match process intent.
 - [ ] H.5 Lay is specified where the surface function depends on it.
 
-## I. Welding — [guideline 08](08-welding.md)
+## I. Welding - [guideline 08](08-welding.md)
 
 - [ ] I.1 Weld symbols, if used, declare the intended ISO system.
 - [ ] I.2 Arrow-side / other-side placement is correct.
 - [ ] I.3 Size and length / pitch are placed on the correct sides of the symbol.
 
-## J. Threads & Machining — [guideline 09](09-machining-threads.md)
+## J. Threads & Machining - [guideline 09](09-machining-threads.md)
 
 - [ ] J.1 Internal and external thread graphics are not swapped.
 - [ ] J.2 Thread family, size, pitch or TPI, and class are complete.
@@ -95,33 +96,33 @@ Every item is a binary PASS / FAIL with visible evidence.
 - [ ] J.4 Pipe thread family is explicit where sealing depends on it.
 - [ ] J.5 Counterbores, countersinks, spotfaces, and thread reliefs are called out when function requires them.
 
-## K. Material & Processes — [guideline 10](10-material-and-heat-treatment.md)
+## K. Material & Processes - [guideline 10](10-material-and-heat-treatment.md)
 
 - [ ] K.1 Material callout is present and unambiguous.
 - [ ] K.2 Heat-treatment notes state target hardness or case depth where relevant.
 - [ ] K.3 Coatings or finishing steps state class / color / thickness where needed.
 - [ ] K.4 Masked or no-coat zones are identified when the process requires them.
 
-## L. Revisions — [guideline 11](11-revisions.md)
+## L. Revisions - [guideline 11](11-revisions.md)
 
 - [ ] L.1 Title block revision matches the latest revision row.
 - [ ] L.2 Revision table contains index, description, date, and approval fields.
 - [ ] L.3 Revision balloons are present for changed areas.
 
-## M. BOM — [guideline 12](12-bom.md)
+## M. BOM - [guideline 12](12-bom.md)
 
 - [ ] M.1 Assembly drawings include a readable parts list.
 - [ ] M.2 Item numbers match balloons.
 - [ ] M.3 Standard parts are clearly identified.
 
-## N. Symbols & Notes — [guidelines 13–14](13-symbols-and-notation.md), [14-edges-and-notes.md](14-edges-and-notes.md)
+## N. Symbols & Notes - [guidelines 13-14](13-symbols-and-notation.md), [14-edges-and-notes.md](14-edges-and-notes.md)
 
 - [ ] N.1 Symbol usage is internally consistent.
 - [ ] N.2 General notes define defaults; local leadered notes override only the pointed feature.
 - [ ] N.3 Edge-break or deburr rule is stated globally or locally where sharp edges matter.
 - [ ] N.4 Critical seating or sealing edges use explicit chamfer or radius callouts instead of vague `deburr`.
 
-## O. Sheet Metal Bends — [guideline 15](15-sheet-metal-bends.md)
+## O. Sheet Metal Bends - [guideline 15](15-sheet-metal-bends.md)
 
 - [ ] O.1 Bend direction, angle, and inside radius are clear.
 - [ ] O.2 Bend order is shown where sequence matters.
@@ -134,3 +135,4 @@ Every item is a binary PASS / FAIL with visible evidence.
 - [ ] P.2 The exported sheet was regenerated from the current automation pass, not reused from a stale drawing file.
 - [ ] P.3 If DimXpert was attempted, it is only treated as valid when it produced real usable annotations; otherwise the drawing relies on the verified drawing-side native path.
 - [ ] P.4 Visible parenthesized dimension text has been removed after the final cleanup pass.
+- [ ] P.5 A duplicate-dimension dedupe pass ran before completion, and any remaining ambiguous duplicates were flagged for review.

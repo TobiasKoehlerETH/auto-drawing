@@ -1,0 +1,23 @@
+[project]
+name = "autodrawing"
+version = "0.1.0"
+description = "OSS-first automatic drawing creation platform"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.116,<1.0",
+  "pydantic>=2.11,<3.0",
+  "python-multipart>=0.0.20,<1.0",
+  "uvicorn>=0.35,<1.0",
+]
+
+[project.optional-dependencies]
+cad = [
+  "pythonocc-core>=7.7; platform_system == 'Windows'",
+]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["autodrawing"]

@@ -11,18 +11,28 @@ The emphasis is now:
 
 ## Current Automation Status
 
-The latest verified SolidWorks-native baseline for this repo is:
+The repo now targets a general single-part drawing tool in Python, built on the proven local SolidWorks COM path already exercised against the sample part.
 
-- create a disposable working part copy before any native dimensioning attempt
-- try part-side DimXpert first
-- create the drawing from scratch
-- use hidden-lines-visible orthographic views and a shaded-only isometric recognition view
-- try native drawing-side dimension import and then native ordinate-oriented auto-dimensioning
-- run a display-dimension cleanup pass to suppress visible parentheses and dual-format noise
+Current v1 behavior:
+
+- accepts `SLDPRT` and `STEP`
+- creates a fresh `.SLDDRW`, `.pdf`, `.preview.png`, `.trace.log`, and `validation.json` on every run
+- classifies the input into a conservative family before choosing the drawing layout:
+  - `prismatic`
+  - `plate`
+  - `turned`
+  - `imported`
+  - `unsupported`
+- keeps A3 / first-angle / metric as the default sheet standard
+- uses hidden-lines-visible orthographic views and a shaded-only isometric recognition view
+- tries part-side DimXpert first for native `SLDPRT`, but only treats it as valid if it creates real usable annotations
+- relies on drawing-side dimension import and family-aware auto-dimensioning as the practical baseline
+- runs a duplicate-dimension dedupe pass before completion so controlling requirements appear once only
+- writes a machine-readable validation result with `pass`, `warning`, `needs_review`, or `fail`
 
 Current limitation:
 
-- part-side DimXpert access is real and should still be attempted first, but it is not yet producing usable annotations on the sample part and must not be treated as a proven source of drawing-ready dimensions
+- imported parts, unsupported feature families, and parts that likely need section/detail views are intentionally downgraded to `needs_review` rather than overclaimed as complete manufacturing drawings
 
 Evidence-heavy implementation notes for the latest verified passes live in the repo root file `C:\Code\auto-drawing\learnings.md`.
 
@@ -50,8 +60,10 @@ For the current `auto-drawing` SolidWorks automation target, also enforce these 
 - Treat vertical and horizontal ordinate dimensions as the top-priority dimensioning method wherever the geometry allows.
 - Avoid overlapping dimension lines, leaders, and value text.
 - Do not use bracketed or parenthesized dimension values.
+- Do not let a controlling requirement appear twice on the sheet.
 - Avoid text/model overlap with the title block.
 - Avoid duplicate dimension text or dual-unit display.
+- Run a duplicate-dimension dedupe pass before accepting the sheet.
 - Recreate the drawing from scratch on each verification pass so the exported preview reflects the current automation, not stale dimensions.
 - Prefer a disposable working part copy for native part-side dimension experiments; keep the original sample part unchanged.
 

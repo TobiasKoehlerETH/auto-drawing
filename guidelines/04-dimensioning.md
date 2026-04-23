@@ -8,19 +8,21 @@ last_verified: 2026-04-20
 confidence: high
 ---
 
-# 04 — Dimensioning
+# 04 - Dimensioning
 
 ![Dimension types](images/dimensioning-examples.svg)
 
 ## Core rules
 
 - State each essential size once, on the clearest view.
+- Each controlling requirement must appear once only on the sheet.
 - Do not dimension to hidden lines unless no clearer option exists.
 - Keep extension lines off the part with a small gap and let them pass the dimension line slightly.
 - Make vertical and horizontal ordinate dimensions the default, top-priority method wherever the geometry allows.
 - Prefer datum-based or ordinate dimensioning for critical patterns; long chains accumulate error.
 - Space dimension lines, leaders, and value text so they do not overlap each other.
 - Do not use bracketed or parenthesized dimension values.
+- Duplicate controlling dimensions are forbidden because they overdefine the drawing.
 - If SolidWorks native auto-dimensioning creates parenthesized display text, clean the display-dimension properties before accepting the sheet.
 
 ## Common dimensioning methods
@@ -94,6 +96,7 @@ SØ30
 ## Good habits
 
 - Put repeated counts in the callout: `4×`, `6×`, `TYP`.
+- Use multiplicity callouts for repeated identical features instead of repeating the same controlling dimension.
 - Keep radius and chamfer conventions consistent across the sheet.
 - If the same feature is defined by size and position, use GD&T rather than repeating linear dimensions.
 - Bias auto-generated drawings toward vertical and horizontal ordinate schemes before considering chain dimensions.
@@ -103,13 +106,14 @@ SØ30
 ## Verified SolidWorks-native baseline for this repo
 
 - Try part-side DimXpert first, but do not assume it will succeed on the sample part.
-- In the current repo baseline, the strongest automatic result comes from drawing-side native tools:
+- In the general single-part tool v1, the strongest automatic result still comes from drawing-side native tools:
   - import dimensions marked for drawing when available
-  - then try ordinate-oriented drawing auto-dimensioning on the orthographic views
+  - then apply family-aware drawing auto-dimensioning to the clearest manufacturing views
+  - then run a duplicate-dimension dedupe pass so controlling requirements appear once only
   - then normalize display-dimension settings to remove visible parentheses and dual-format clutter
 - Treat this as a stronger automatic baseline, not as a final guarantee of a clean manufacturing sheet.
 
 ## Current repo limitation
 
 - DimXpert is still a top-priority native tool to attempt, but it is not yet a verified working source of usable sample-part annotations in this repository.
-- The current SolidWorks-native pass can produce a much better baseline automatically, but exported previews still need visual review for crowding and overlap.
+- The current SolidWorks-native pass can produce a much better baseline automatically, but exported previews still need visual review for crowding, overlap, and family-specific completeness such as sections or details.
