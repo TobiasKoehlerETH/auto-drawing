@@ -9,12 +9,25 @@ from autodrawing.pipeline import AutodrawingPipeline
 
 class ImporterPipelineTests(unittest.TestCase):
     def _has_vertical_outline(self, view, x_value: float) -> bool:
+        target = round(x_value, 2)
+        intervals: list[tuple[float, float]] = []
         for edge in view.visible_edges:
             xs = {round(point.x, 2) for point in edge.points}
+            if xs != {target}:
+                continue
             ys = [round(point.y, 2) for point in edge.points]
-            if xs == {round(x_value, 2)} and min(ys) == 0.0 and max(ys) == round(view.bounds.height, 2):
-                return True
-        return False
+            intervals.append((min(ys), max(ys)))
+        if not intervals:
+            return False
+        intervals.sort()
+        merged_lo, merged_hi = intervals[0]
+        for lo, hi in intervals[1:]:
+            if lo <= merged_hi + 1e-3:
+                merged_hi = max(merged_hi, hi)
+            else:
+                merged_lo, merged_hi = lo, hi
+                break
+        return merged_lo <= 0.01 and merged_hi >= round(view.bounds.height, 2) - 0.01
 
     def _visible_verticals(self, view) -> set[float]:
         verticals: set[float] = set()
@@ -130,6 +143,7 @@ class ImporterPipelineTests(unittest.TestCase):
 
         bundle = AutodrawingPipeline().from_step_file(sample, mode="final")
         front = next(view for view in bundle.projection.views if view.kind == "front")
+        top = next(view for view in bundle.projection.views if view.kind == "top")
         right = next(view for view in bundle.projection.views if view.kind == "right")
         iso_faces = [
             item
@@ -144,6 +158,9 @@ class ImporterPipelineTests(unittest.TestCase):
         self.assertTrue(self._has_vertical_outline(right, right.bounds.width))
         self.assertEqual(self._visible_verticals(front), {0.0, round(front.bounds.width, 2)})
         self.assertEqual(self._visible_verticals(right), {0.0, round(right.bounds.width, 2)})
+        self.assertGreaterEqual(len(front.hidden_edges), 4)
+        self.assertGreaterEqual(len(top.centerlines), 8)
+        self.assertGreaterEqual(len(bundle.scene_graph.layers["centerlines"]), 8)
         self.assertTrue(iso_faces)
 
     def test_occt_mesh_projection_adds_orthographic_silhouettes(self):

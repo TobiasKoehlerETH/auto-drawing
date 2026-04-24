@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Axis3d, Box, Boxes, Contrast, Eye, Grid3x3, Loader2 } from "lucide-react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
@@ -38,9 +39,10 @@ const CAMERA_FIT_PADDING = 1.12;
 interface StepViewerProps {
   model: ImportResult | null;
   loading?: boolean;
+  viewToolbarPortal?: HTMLElement | null;
 }
 
-export function StepViewer({ model, loading = false }: StepViewerProps) {
+export function StepViewer({ model, loading = false, viewToolbarPortal }: StepViewerProps) {
   const mountRef = useRef<HTMLDivElement | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
@@ -350,10 +352,66 @@ export function StepViewer({ model, loading = false }: StepViewerProps) {
     controls.update();
   }
 
+  const viewPresetToolbar = stats ? (
+    <div className="grid gap-1.5">
+      <div className="flex w-full items-center gap-1 overflow-x-auto rounded-[8px] border bg-background/95 p-1 text-xs shadow-sm backdrop-blur">
+        <button
+          type="button"
+          title={showHelpers ? "Hide grid and axes" : "Show grid and axes"}
+          aria-label="Toggle grid and axes"
+          aria-pressed={showHelpers}
+          onClick={() => setShowHelpers((value) => !value)}
+          className={
+            "grid h-7 w-7 shrink-0 place-items-center rounded-[6px] transition " +
+            (showHelpers ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-accent hover:text-accent-foreground")
+          }
+        >
+          <Axis3d className="size-3.5" />
+        </button>
+        {VIEW_MODES.map((mode) => {
+          const Icon = mode.icon;
+          const active = viewMode === mode.id;
+          return (
+            <button
+              key={mode.id}
+              type="button"
+              title={mode.label}
+              aria-label={mode.label}
+              aria-pressed={active}
+              onClick={() => setViewMode(mode.id)}
+              className={
+                "grid h-7 w-7 shrink-0 place-items-center rounded-[6px] transition " +
+                (active ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-accent hover:text-accent-foreground")
+              }
+            >
+              <Icon className="size-3.5" />
+            </button>
+          );
+        })}
+      </div>
+      <div className="flex w-full flex-wrap items-center gap-1 rounded-[8px] border bg-background/95 p-1 text-xs shadow-sm backdrop-blur">
+        {VIEW_PRESETS.map((preset) => (
+          <button
+            key={preset.id}
+            type="button"
+            title={preset.label}
+            aria-label={`View ${preset.label}`}
+            onClick={() => applyPreset(preset)}
+            className="h-7 shrink-0 rounded-[6px] px-2.5 font-medium text-muted-foreground transition hover:bg-accent hover:text-accent-foreground"
+          >
+            {preset.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  ) : null;
+
   return (
     <div className="relative h-full w-full">
+      {viewToolbarPortal && viewPresetToolbar ? createPortal(viewPresetToolbar, viewToolbarPortal) : null}
       <div ref={mountRef} className="h-full w-full" />
 
+      {!viewToolbarPortal ? (
       <div className="absolute right-3 top-3 flex items-center gap-2">
         <button
           type="button"
@@ -393,6 +451,7 @@ export function StepViewer({ model, loading = false }: StepViewerProps) {
           })}
         </div>
       </div>
+      ) : null}
 
       {loading ? (
         <div className="pointer-events-none absolute inset-0 grid place-items-center bg-white/60 backdrop-blur-[1px]">
@@ -423,7 +482,7 @@ export function StepViewer({ model, loading = false }: StepViewerProps) {
         </div>
       ) : null}
 
-      {stats ? (
+      {stats && !viewToolbarPortal ? (
         <div className="absolute bottom-3 right-3 flex rounded-lg bg-white/95 p-1 shadow ring-1 ring-slate-200 backdrop-blur">
           {VIEW_PRESETS.map((preset) => (
             <button

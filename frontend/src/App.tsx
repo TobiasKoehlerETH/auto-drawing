@@ -1,13 +1,50 @@
-import { startTransition, useEffect, useMemo, useRef, useState } from "react";
-import { Loader2, MoveDiagonal, Ruler, SquareStack, Upload } from "lucide-react";
+import { startTransition, useEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type RefObject } from "react";
+import {
+  AlertTriangle,
+  Box,
+  ChevronDown,
+  CircleDot,
+  FileInput,
+  Layers3,
+  Loader2,
+  Ruler,
+  SquareStack,
+  Upload,
+} from "lucide-react";
 
-import { DrawingCanvas } from "./components/DrawingCanvas";
-import { StepViewer } from "./components/StepViewer";
-import { Button } from "./components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./components/ui/card";
-import { Input } from "./components/ui/input";
-import { Separator } from "./components/ui/separator";
-import { importStepBuffer, type ImportResult } from "./lib/occtStepImport";
+import { DrawingCanvas } from "@/components/DrawingCanvas";
+import { StepViewer } from "@/components/StepViewer";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Separator } from "@/components/ui/separator";
+import {
+  Sidebar,
+  SidebarContent,
+  SidebarGroup,
+  SidebarGroupContent,
+  SidebarGroupLabel,
+  SidebarHeader,
+  SidebarInset,
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
+  SidebarProvider,
+  SidebarRail,
+  SidebarSeparator,
+  useSidebar,
+} from "@/components/ui/sidebar";
+import { importStepBuffer, type ImportResult } from "@/lib/occtStepImport";
+import { cn } from "@/lib/utils";
 
 type LoadedSource = {
   buffer: ArrayBuffer;
@@ -24,6 +61,18 @@ type DrawingCommand = {
   before: Record<string, unknown>;
   after: Record<string, unknown>;
 };
+
+type CommandApplyOptions = {
+  quiet?: boolean;
+};
+
+const VIEW_SCALE_OPTIONS = [
+  { label: "4:1", value: 4 },
+  { label: "2:1", value: 2 },
+  { label: "1:1", value: 1 },
+  { label: "1:2", value: 0.5 },
+  { label: "1:4", value: 0.25 },
+];
 
 type PreviewViewState = {
   id: string;
@@ -42,17 +91,22 @@ type PreviewViewState = {
   };
 };
 
-type PreviewTitleBlockField = {
+type PreviewDimension = {
   id: string;
+  view_id: string;
   label: string;
-  value: string;
+  value: number;
+  units: string;
   placement: {
     x_mm: number;
     y_mm: number;
   };
-  width_mm: number;
-  editable: boolean;
-  autofill_key?: string | null;
+  anchor_a: {
+    role: string;
+  };
+  anchor_b: {
+    role: string;
+  };
 };
 
 type DrawingPreview = {
@@ -80,24 +134,19 @@ type DrawingPreview = {
         }
       >;
     };
-    title_block_fields: PreviewTitleBlockField[];
-    dimensions: Array<{
+    title_block_fields: Array<{
       id: string;
-      view_id: string;
       label: string;
-      value: number;
-      units: string;
+      value: string;
       placement: {
         x_mm: number;
         y_mm: number;
       };
-      anchor_a: {
-        role: string;
-      };
-      anchor_b: {
-        role: string;
-      };
+      width_mm: number;
+      editable: boolean;
+      autofill_key?: string | null;
     }>;
+    dimensions: PreviewDimension[];
   };
   scene_graph: {
     layers: Record<
@@ -127,6 +176,15 @@ type DrawingPreview = {
   };
 };
 
+type ScaleState = {
+  orthographicViews: PreviewViewState[];
+  orthographicScale: number | null;
+  isometricView: PreviewViewState | null;
+  selectedScaleOption: string;
+  selectedScaleLabel: string;
+  onApplyOrthographicScale: (nextScale: number) => Promise<void>;
+};
+
 export default function App() {
   const [source, setSource] = useState<LoadedSource | null>(null);
   const [preview, setPreview] = useState<DrawingPreview | null>(null);
@@ -134,25 +192,11 @@ export default function App() {
   const [status, setStatus] = useState("");
   const [loadingModel, setLoadingModel] = useState(false);
   const [savingPreview, setSavingPreview] = useState(false);
-  const [orthographicScaleDraft, setOrthographicScaleDraft] = useState("");
-  const [titleBlockDrafts, setTitleBlockDrafts] = useState<Record<string, string>>({});
+  const [drawingToolbarPortal, setDrawingToolbarPortal] = useState<HTMLDivElement | null>(null);
+  const [modelViewToolbarPortal, setModelViewToolbarPortal] = useState<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const autoloadAttemptedRef = useRef(false);
-  const lastSyncedTitleBlockValuesRef = useRef<Record<string, string>>({});
   const busy = loadingModel || savingPreview;
-
-  const editableTitleBlockFields = useMemo(
-    () => preview?.document.title_block_fields.filter((field) => field.editable) ?? [],
-    [preview?.document.title_block_fields],
-  );
-
-  const selectedView = useMemo(
-    () => {
-      if (!preview || !selectedViewId) return null;
-      return preview.views.find((view) => view.id === selectedViewId) ?? null;
-    },
-    [preview?.views, selectedViewId],
-  );
 
   const orthographicViews = useMemo(
     () => preview?.views.filter((view) => view.kind !== "isometric") ?? [],
@@ -167,30 +211,28 @@ export default function App() {
     return rest.every((scale) => scale === first) ? first : null;
   }, [orthographicViews]);
 
-  const changedTitleBlockFields = useMemo(
-    () => editableTitleBlockFields.filter((field) => (titleBlockDrafts[field.id] ?? field.value) !== field.value),
-    [editableTitleBlockFields, titleBlockDrafts],
+  const isometricView = useMemo(
+    () => preview?.views.find((view) => view.kind === "isometric") ?? null,
+    [preview?.views],
   );
 
-  useEffect(() => {
-    setOrthographicScaleDraft(orthographicScale === null ? "" : orthographicScale.toFixed(2));
-  }, [orthographicScale, preview?.preview_id]);
+  const selectedScaleOption = useMemo(() => {
+    if (orthographicScale === null) {
+      return orthographicViews.length > 0 ? "mixed" : "1";
+    }
+    const matchingOption = VIEW_SCALE_OPTIONS.find((option) => Math.abs(option.value - orthographicScale) < 0.0001);
+    return matchingOption ? String(matchingOption.value) : "custom";
+  }, [orthographicScale, orthographicViews.length]);
 
-  useEffect(() => {
-    const syncedValues = buildTitleBlockDraftMap(editableTitleBlockFields);
-    setTitleBlockDrafts((current) => {
-      const next: Record<string, string> = {};
-      for (const field of editableTitleBlockFields) {
-        const previousSyncedValue = lastSyncedTitleBlockValuesRef.current[field.id];
-        const currentDraft = current[field.id];
-        const shouldPreserveDraft =
-          currentDraft !== undefined && previousSyncedValue !== undefined && currentDraft !== previousSyncedValue && previousSyncedValue === field.value;
-        next[field.id] = shouldPreserveDraft ? currentDraft : field.value;
-      }
-      return sameStringRecord(current, next) ? current : next;
-    });
-    lastSyncedTitleBlockValuesRef.current = syncedValues;
-  }, [editableTitleBlockFields, preview?.preview_id]);
+  const selectedScaleLabel = useMemo(() => {
+    if (selectedScaleOption === "mixed") {
+      return "Mixed";
+    }
+    if (selectedScaleOption === "custom" && orthographicScale !== null) {
+      return formatScaleRatio(orthographicScale);
+    }
+    return VIEW_SCALE_OPTIONS.find((option) => String(option.value) === selectedScaleOption)?.label ?? "1:1";
+  }, [orthographicScale, selectedScaleOption]);
 
   useEffect(() => {
     if (autoloadAttemptedRef.current || source || preview) {
@@ -223,7 +265,7 @@ export default function App() {
       });
   }, [preview, source]);
 
-  async function handleUpload(event: React.ChangeEvent<HTMLInputElement>) {
+  async function handleUpload(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     if (!file) return;
     setLoadingModel(true);
@@ -292,9 +334,11 @@ export default function App() {
     });
   }
 
-  async function applyCommands(commands: DrawingCommand[]) {
+  async function applyCommands(commands: DrawingCommand[], options: CommandApplyOptions = {}) {
     if (!preview || commands.length === 0) return false;
-    setSavingPreview(true);
+    if (!options.quiet) {
+      setSavingPreview(true);
+    }
     try {
       const endpoint = commands.length === 1 ? "command" : "commands";
       const payload = commands.length === 1 ? { command: commands[0] } : { commands };
@@ -316,316 +360,369 @@ export default function App() {
       setStatus(error instanceof Error ? error.message : "Failed to update drawing");
       return false;
     } finally {
-      setSavingPreview(false);
+      if (!options.quiet) {
+        setSavingPreview(false);
+      }
     }
   }
 
-  function resetTitleBlockDrafts() {
-    setTitleBlockDrafts(buildTitleBlockDraftMap(editableTitleBlockFields));
-  }
-
-  async function applyTitleBlockEdits() {
-    if (!preview || changedTitleBlockFields.length === 0) return;
-    const timestamp = Date.now();
-    const commands = changedTitleBlockFields.map((field, index) => ({
-      id: `cmd-title-field-${field.id}-${timestamp}-${index}`,
-      kind: "SetTitleBlockField",
-      target_id: field.id,
-      before: { value: field.value },
-      after: { value: titleBlockDrafts[field.id] ?? field.value },
-    }));
-    await applyCommands(commands);
-  }
-
-  async function applyOrthographicScale() {
+  async function applyOrthographicScale(nextScale: number) {
     if (!preview || orthographicViews.length === 0) return;
-    const nextScale = Number.parseFloat(orthographicScaleDraft);
     if (!Number.isFinite(nextScale) || nextScale <= 0) {
-      setStatus("Enter a positive scale for the orthographic views.");
+      setStatus("Choose a valid view scale.");
       return;
     }
     const timestamp = Date.now();
-    const commands = orthographicViews.map((view, index) => ({
-      id: `cmd-ortho-scale-${view.id}-${timestamp}-${index}`,
-      kind: "ChangeViewScale",
-      target_id: view.id,
-      before: { scale: view.scale },
-      after: { scale: nextScale },
-    }));
-    await applyCommands(commands);
+    await applyCommands(
+      orthographicViews.map((view, index) => ({
+        id: `cmd-ortho-scale-${view.id}-${timestamp}-${index}`,
+        kind: "ChangeViewScale",
+        target_id: view.id,
+        before: { scale: view.scale },
+        after: { scale: nextScale },
+      })),
+    );
   }
 
-  return (
-    <div className="min-h-screen bg-white text-slate-950">
-      <header className="sticky top-0 z-30 border-b border-slate-200/80 bg-white/95 backdrop-blur">
-        <div className="mx-auto flex h-16 max-w-[1800px] items-center justify-between gap-4 px-4 lg:px-6">
-          <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-950 text-white shadow-sm">
-              <SquareStack className="h-4 w-4" />
-            </div>
-            <div>
-              <p className="text-sm font-semibold tracking-[0.18em] text-slate-500 uppercase">TechDraw-Inspired</p>
-              <p className="text-base font-semibold">autodrawing canvas</p>
-            </div>
-          </div>
-          {busy ? <Loader2 className="h-4 w-4 animate-spin text-slate-500" /> : null}
-        </div>
-      </header>
+  const scaleState: ScaleState = {
+    orthographicViews,
+    orthographicScale,
+    isometricView,
+    selectedScaleOption,
+    selectedScaleLabel,
+    onApplyOrthographicScale: applyOrthographicScale,
+  };
 
-      <div className="mx-auto grid min-h-[calc(100vh-64px)] max-w-[1800px] gap-4 p-4 lg:grid-cols-[310px_minmax(0,1fr)_360px] lg:p-6">
-        <aside className="grid gap-4 self-start">
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">Model</CardTitle>
-            </CardHeader>
-            <CardContent className="grid gap-3">
-              <input
-                ref={inputRef}
-                type="file"
-                accept=".step,.stp,.STEP,.STP,.sldprt,.SLDPRT"
-                onChange={handleUpload}
-                disabled={busy}
-                className="hidden"
-              />
-              <Button onClick={() => inputRef.current?.click()} disabled={busy} className="w-full justify-center">
-                {loadingModel ? <Loader2 className="animate-spin" /> : <Upload />}
-                {loadingModel ? "Working" : "Upload STEP"}
-              </Button>
-              {source ? (
-                <div className="grid gap-2 rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm">
-                  <MetricRow label="Name" value={source.label} />
-                  <MetricRow label="Size" value={`${(source.bytes / 1024).toFixed(1)} KB`} />
+  return (
+    <SidebarProvider
+      className="bg-sidebar"
+      style={
+        {
+          "--sidebar-width": "18rem",
+        } as CSSProperties
+      }
+    >
+      <input
+        ref={inputRef}
+        type="file"
+        accept=".step,.stp,.STEP,.STP,.sldprt,.SLDPRT"
+        onChange={handleUpload}
+        disabled={busy}
+        className="hidden"
+      />
+      <WorkbenchSidebar
+        source={source}
+        preview={preview}
+        status={status}
+        busy={busy}
+        loadingModel={loadingModel}
+        savingPreview={savingPreview}
+        inputRef={inputRef}
+        scaleState={scaleState}
+      />
+      <SidebarInset className="min-w-0 overflow-hidden bg-muted/30">
+        <div className="flex min-h-0 flex-1 flex-col gap-3 p-3 md:gap-4 md:p-4 xl:grid xl:h-svh xl:grid-cols-[minmax(0,1fr)_minmax(320px,380px)] xl:overflow-hidden">
+          <main className="min-w-0 xl:min-h-0">
+            <Card className="h-full gap-0 overflow-hidden rounded-[8px] border-border/80 bg-card py-0 shadow-sm">
+              <CardHeader className="border-b px-4 py-3 md:px-5">
+                <div className="flex min-w-0 items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <CardTitle className="truncate text-sm">Drawing Sheet</CardTitle>
+                    <CardDescription className="truncate text-xs">
+                      {preview
+                        ? `${preview.document.sheet.width_mm} x ${preview.document.sheet.height_mm} mm, ${preview.views.length} views`
+                        : "Load a STEP model to generate the first sheet"}
+                    </CardDescription>
+                  </div>
+                  <div ref={setDrawingToolbarPortal} className={cn("min-h-8 shrink-0", !preview && "hidden")} />
+                </div>
+              </CardHeader>
+              <CardContent className="min-h-0 flex-1 p-2 md:p-3">
+                {preview ? (
+                  <DrawingCanvas
+                    preview={preview}
+                    selectedViewId={selectedViewId}
+                    busy={busy}
+                    toolbarPortal={drawingToolbarPortal}
+                    onSelectView={setSelectedViewId}
+                    onApplyCommands={applyCommands}
+                  />
+                ) : (
+                  <EmptyDrawingState onUpload={() => inputRef.current?.click()} busy={busy} />
+                )}
+              </CardContent>
+            </Card>
+          </main>
+
+          <aside className="min-w-0 xl:min-h-0 xl:overflow-hidden">
+            <Card className="h-full gap-0 overflow-hidden rounded-[8px] border-border/80 bg-card py-0 shadow-sm xl:min-h-0">
+              <CardHeader className="border-b px-4 py-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <CardTitle className="text-sm">3D Model</CardTitle>
+                  </div>
+                  <Badge variant="outline" className="rounded-[6px]">
+                    <Box className="size-3" />
+                    3D
+                  </Badge>
+                </div>
+                <div ref={setModelViewToolbarPortal} className={cn("min-h-8", !source?.imported && "hidden")} />
+              </CardHeader>
+              <CardContent className="min-h-0 p-0">
+                <div className="h-[320px] md:h-[420px] xl:h-full xl:min-h-[360px]">
+                  <StepViewer model={source?.imported ?? null} loading={loadingModel} viewToolbarPortal={modelViewToolbarPortal} />
+                </div>
+              </CardContent>
+              {source && source.viewerMode === "backend-fallback" ? (
+                <div className="border-t bg-amber-50 px-4 py-3 text-xs text-amber-900">
+                  Browser STEP import was not available for this file. The drawing sheet is shown from the backend preview, and the 3D viewer may be blank.
                 </div>
               ) : null}
-              {status ? <p className="text-xs text-slate-500">{status}</p> : null}
-              {(preview?.validation.warnings ?? []).map((warning) => (
-                <p key={warning} className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900">
-                  {warning}
-                </p>
-              ))}
-            </CardContent>
-          </Card>
+            </Card>
+          </aside>
+        </div>
+      </SidebarInset>
+    </SidebarProvider>
+  );
+}
 
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">Selection</CardTitle>
-              <CardDescription>Use the canvas or the buttons below to focus a drawing view.</CardDescription>
-            </CardHeader>
-            <CardContent className="grid gap-3">
-              <div className="grid gap-2">
-                {preview?.views.map((view) => {
-                  const active = view.id === selectedView?.id;
-                  return (
-                    <Button
-                      key={view.id}
-                      variant={active ? "default" : "outline"}
-                      onClick={() => setSelectedViewId(view.id)}
-                      aria-label={`Select ${view.kind} view`}
-                      className="justify-between"
-                    >
-                      <span>{view.label}</span>
-                      <span className="text-xs opacity-80">{view.kind}</span>
-                    </Button>
-                  );
-                }) ?? <p className="text-sm text-slate-500">Load a model to populate the sheet.</p>}
+function WorkbenchSidebar({
+  source,
+  preview,
+  status,
+  busy,
+  loadingModel,
+  savingPreview,
+  inputRef,
+  scaleState,
+}: {
+  source: LoadedSource | null;
+  preview: DrawingPreview | null;
+  status: string;
+  busy: boolean;
+  loadingModel: boolean;
+  savingPreview: boolean;
+  inputRef: RefObject<HTMLInputElement | null>;
+  scaleState: ScaleState;
+}) {
+  const { isMobile, toggleSidebar } = useSidebar();
+  const warningCount = preview?.validation.warnings.length ?? 0;
+  const errorCount = preview?.validation.errors.length ?? 0;
+
+  return (
+    <Sidebar collapsible="icon" variant="inset">
+      <SidebarHeader>
+        <SidebarMenu>
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              type="button"
+              size="lg"
+              tooltip="AutoDrawing"
+              aria-label="Toggle AutoDrawing sidebar"
+              className="gap-3 group-data-[collapsible=icon]:justify-center"
+              onClick={toggleSidebar}
+            >
+              <div className="grid size-8 shrink-0 place-items-center rounded-[8px] bg-primary text-primary-foreground">
+                <SquareStack className="size-4" />
               </div>
-
-              <div className="grid gap-2 rounded-xl border border-slate-200 bg-slate-50 p-3" data-selected-view-id={selectedView?.id ?? ""}>
-                <div className="flex items-center gap-2 text-sm font-medium text-slate-700">
-                  <MoveDiagonal className="h-4 w-4" />
-                  Selected view
-                </div>
-                <MetricRow label="Label" value={selectedView?.label ?? "None"} />
-                <MetricRow label="X" value={`${selectedView?.x_mm.toFixed(1) ?? "0.0"} mm`} metric="x" />
-                <MetricRow label="Y" value={`${selectedView?.y_mm.toFixed(1) ?? "0.0"} mm`} metric="y" />
-                <MetricRow label="Scale" value={`${selectedView?.scale.toFixed(2) ?? "0.00"} x`} metric="scale" />
+              <div className="grid min-w-0 flex-1 text-left text-sm leading-tight group-data-[collapsible=icon]:hidden">
+                <span className="truncate font-semibold">AutoDrawing</span>
+                <span className="truncate text-xs text-sidebar-foreground/60">CAD workbench</span>
               </div>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        </SidebarMenu>
+      </SidebarHeader>
 
-              <Separator />
+      <SidebarContent>
+        <SidebarGroup>
+          <SidebarGroupLabel>Workspace</SidebarGroupLabel>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  type="button"
+                  tooltip={loadingModel ? "Uploading model" : "Upload STEP or SLDPRT"}
+                  onClick={() => inputRef.current?.click()}
+                  disabled={busy}
+                  isActive={!source}
+                >
+                  {loadingModel ? <Loader2 className="animate-spin" /> : <Upload />}
+                  <span>{loadingModel ? "Working" : "Upload model"}</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+              <SidebarMenuItem>
+                <SidebarMenuButton type="button" tooltip="Drawing sheet" isActive={Boolean(preview)}>
+                  <Ruler />
+                  <span>Drawing sheet</span>
+                  {preview ? <SidebarPill>{preview.views.length}</SidebarPill> : null}
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+              <SidebarMenuItem>
+                <SidebarMenuButton type="button" tooltip="Model viewer" isActive={Boolean(source)}>
+                  <Layers3 />
+                  <span>Model viewer</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+              <SidebarMenuItem>
+                <SidebarMenuButton type="button" tooltip="Validation">
+                  <AlertTriangle />
+                  <span>Validation</span>
+                  {warningCount + errorCount > 0 ? <SidebarPill>{warningCount + errorCount}</SidebarPill> : null}
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
 
-              <div className="grid gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3" data-orthographic-scale-editor>
-                <div className="space-y-1">
-                  <p className="text-sm font-medium text-slate-700">Orthographic scale</p>
-                  <p className="text-xs text-slate-500">Applies to every view except the isometric view.</p>
-                </div>
-                <MetricRow
-                  label="Current"
-                  value={orthographicScale === null ? "Mixed" : `${orthographicScale.toFixed(2)} x`}
-                  metric="orthographic-scale"
-                />
-                <div className="flex items-center gap-2">
-                  <Input
-                    type="number"
-                    min="0.1"
-                    step="0.05"
-                    value={orthographicScaleDraft}
-                    onChange={(event) => setOrthographicScaleDraft(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter") {
-                        event.preventDefault();
-                        void applyOrthographicScale();
-                      }
-                    }}
-                    disabled={busy || orthographicViews.length === 0}
-                    placeholder="1.00"
-                    data-orthographic-scale-input
-                  />
-                  <Button
-                    type="button"
-                    onClick={() => void applyOrthographicScale()}
-                    disabled={busy || orthographicViews.length === 0 || orthographicScaleDraft.trim().length === 0}
-                    data-orthographic-scale-apply
-                  >
-                    {savingPreview ? <Loader2 className="animate-spin" /> : null}
-                    Apply
-                  </Button>
-                </div>
-              </div>
+        <SidebarSeparator />
 
-              <Separator />
+        {preview ? (
+          <SidebarGroup>
+            <SidebarGroupLabel>Scale</SidebarGroupLabel>
+            <SidebarGroupContent className="grid gap-2 group-data-[collapsible=icon]:hidden">
+              <ScaleControl scaleState={scaleState} busy={busy} savingPreview={savingPreview} />
+            </SidebarGroupContent>
+          </SidebarGroup>
+        ) : null}
+      </SidebarContent>
+      <SidebarRail />
+    </Sidebar>
+  );
+}
 
-              <div className="grid gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3" data-title-block-editor>
-                <div className="flex items-start justify-between gap-3">
-                  <div className="space-y-1">
-                    <p className="text-sm font-medium text-slate-700">Title block</p>
-                    <p className="text-xs text-slate-500">Edit sheet text here instead of typing directly on the canvas.</p>
-                  </div>
-                  {changedTitleBlockFields.length > 0 ? (
-                    <span className="rounded-full bg-amber-100 px-2 py-1 text-[11px] font-semibold text-amber-900">
-                      {changedTitleBlockFields.length} pending
-                    </span>
-                  ) : null}
-                </div>
-
-                {editableTitleBlockFields.length > 0 ? (
-                  <>
-                    <div className="grid max-h-[320px] gap-3 overflow-y-auto pr-1">
-                      {editableTitleBlockFields.map((field) => (
-                        <label key={field.id} className="grid gap-1.5" data-title-block-field={field.id}>
-                          <span className="text-[11px] font-semibold tracking-[0.14em] text-slate-500 uppercase">{field.label}</span>
-                          <Input
-                            value={titleBlockDrafts[field.id] ?? field.value}
-                            onChange={(event) =>
-                              setTitleBlockDrafts((current) => ({
-                                ...current,
-                                [field.id]: event.target.value,
-                              }))
-                            }
-                            onKeyDown={(event) => {
-                              if (event.key === "Enter") {
-                                event.preventDefault();
-                                void applyTitleBlockEdits();
-                                return;
-                              }
-                              if (event.key === "Escape") {
-                                event.preventDefault();
-                                setTitleBlockDrafts((current) => ({
-                                  ...current,
-                                  [field.id]: field.value,
-                                }));
-                              }
-                            }}
-                            disabled={busy}
-                            autoComplete="off"
-                            data-title-block-input={field.id}
-                          />
-                        </label>
-                      ))}
-                    </div>
-
-                    <div className="flex items-center gap-2">
-                      <Button type="button" variant="outline" onClick={resetTitleBlockDrafts} disabled={busy || changedTitleBlockFields.length === 0}>
-                        Reset
-                      </Button>
-                      <Button
-                        type="button"
-                        className="flex-1 justify-center"
-                        onClick={() => void applyTitleBlockEdits()}
-                        disabled={busy || changedTitleBlockFields.length === 0}
-                        data-title-block-apply
-                      >
-                        {savingPreview ? <Loader2 className="animate-spin" /> : null}
-                        {savingPreview ? "Applying..." : changedTitleBlockFields.length > 1 ? "Apply Title Block Fields" : "Apply Title Block"}
-                      </Button>
-                    </div>
-                  </>
-                ) : (
-                  <p className="text-sm text-slate-500">Load a drawing with editable title block fields to update them here.</p>
-                )}
-              </div>
-            </CardContent>
-          </Card>
-        </aside>
-
-        <main className="grid gap-4 self-start">
-          <Card className="overflow-hidden border-slate-200/80 bg-white">
-            <CardHeader className="border-b border-slate-200/80">
-              <CardTitle className="text-base">Drawing</CardTitle>
-            </CardHeader>
-            <CardContent className="p-4">
-              {preview ? (
-                <DrawingCanvas
-                  preview={preview}
-                  selectedViewId={selectedViewId}
-                  busy={busy}
-                  onSelectView={setSelectedViewId}
-                  onApplyCommands={applyCommands}
-                />
-              ) : (
-                <div className="grid h-full min-h-[600px] place-items-center rounded-[28px] border border-dashed border-slate-300 bg-slate-50/80 text-center">
-                  <div className="max-w-sm space-y-3 px-6">
-                    <Ruler className="mx-auto h-9 w-9 text-slate-400" />
-                    <p className="text-lg font-semibold">Load a STEP model to open the sheet canvas.</p>
-                    <p className="text-sm text-slate-500">The drawing editor supports box selection, panning, zooming, and direct manipulation on the sheet.</p>
-                  </div>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </main>
-
-        <aside className="grid gap-4 self-start">
-          <Card className="overflow-hidden">
-            <CardHeader>
-              <CardTitle className="text-base">3D</CardTitle>
-            </CardHeader>
-            <CardContent className="h-[720px] p-0">
-              <div className="h-full">
-                <StepViewer model={source?.imported ?? null} />
-              </div>
-            </CardContent>
-            {source && source.viewerMode === "backend-fallback" ? (
-              <div className="border-t border-slate-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-                Browser STEP import was not available for this file. The drawing sheet is shown from the backend preview, and the 3D viewer may be blank.
-              </div>
-            ) : null}
-          </Card>
-        </aside>
+function EmptyDrawingState({ onUpload, busy }: { onUpload: () => void; busy: boolean }) {
+  return (
+    <div className="grid min-h-[420px] place-items-center rounded-[8px] border border-dashed bg-background text-center md:min-h-[calc(100vh-11rem)]">
+      <div className="grid max-w-md gap-4 px-6">
+        <div className="mx-auto grid size-12 place-items-center rounded-[8px] border bg-muted">
+          <FileInput className="size-5 text-muted-foreground" />
+        </div>
+        <div className="grid gap-2">
+          <p className="text-lg font-semibold">Load a model to open the sheet canvas</p>
+          <p className="text-sm text-muted-foreground">
+            The editor supports box selection, panning, zooming, linked view movement, title block edits, and direct sheet manipulation.
+          </p>
+        </div>
+        <div className="flex justify-center">
+          <Button type="button" className="rounded-[8px]" onClick={onUpload} disabled={busy}>
+            {busy ? <Loader2 className="animate-spin" /> : <Upload />}
+            Upload model
+          </Button>
+        </div>
       </div>
     </div>
   );
 }
 
-function MetricRow({ label, value, metric }: { label: string; value: string; metric?: string }) {
+function ScaleControl({
+  scaleState,
+  busy,
+  savingPreview,
+}: {
+  scaleState: ScaleState;
+  busy: boolean;
+  savingPreview: boolean;
+}) {
+  const { orthographicViews, selectedScaleOption, selectedScaleLabel, onApplyOrthographicScale } = scaleState;
+
+  if (orthographicViews.length === 0) {
+    return null;
+  }
+
   return (
-    <div className="flex items-center justify-between gap-4 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
-      <span className="text-slate-500">{label}</span>
-      <span className="max-w-[180px] truncate font-medium text-slate-900" data-view-metric={metric}>
-        {value}
-      </span>
+    <div className="grid gap-2 rounded-[8px] border bg-background p-2" data-orthographic-scale-editor>
+      <div className="flex items-center justify-between gap-2 text-xs">
+        <span className="font-medium">Scale</span>
+      </div>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="w-full justify-between rounded-[8px] bg-background px-3"
+            disabled={busy}
+            data-orthographic-scale-input
+          >
+            <span>{selectedScaleLabel}</span>
+            <ChevronDown className="size-4 text-muted-foreground" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start" className="w-[var(--radix-dropdown-menu-trigger-width)]">
+          <DropdownMenuLabel>View scale</DropdownMenuLabel>
+          {(selectedScaleOption === "mixed" || selectedScaleOption === "custom") && (
+            <>
+              <DropdownMenuRadioGroup value={selectedScaleOption}>
+                <DropdownMenuRadioItem value={selectedScaleOption} disabled>
+                  {selectedScaleLabel}
+                </DropdownMenuRadioItem>
+              </DropdownMenuRadioGroup>
+              <DropdownMenuSeparator />
+            </>
+          )}
+          <DropdownMenuRadioGroup
+            value={selectedScaleOption}
+            onValueChange={(value) => {
+              const nextScale = Number.parseFloat(value);
+              if (Number.isFinite(nextScale)) {
+                void onApplyOrthographicScale(nextScale);
+              }
+            }}
+          >
+            {VIEW_SCALE_OPTIONS.map((option) => (
+              <DropdownMenuRadioItem key={option.label} value={String(option.value)}>
+                {option.label}
+              </DropdownMenuRadioItem>
+            ))}
+          </DropdownMenuRadioGroup>
+        </DropdownMenuContent>
+      </DropdownMenu>
+      {savingPreview ? (
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <Loader2 className="size-3.5 animate-spin" />
+          Applying scale
+        </div>
+      ) : null}
     </div>
   );
 }
 
-function buildTitleBlockDraftMap(fields: PreviewTitleBlockField[]) {
-  return Object.fromEntries(fields.map((field) => [field.id, field.value]));
+function StatusNote({ status, busy }: { status: string; busy: boolean }) {
+  return (
+    <div className="flex items-start gap-2 rounded-[8px] border bg-background p-3 text-xs text-muted-foreground">
+      {busy ? <Loader2 className="mt-0.5 size-3.5 shrink-0 animate-spin" /> : <CircleDot className="mt-0.5 size-3.5 shrink-0" />}
+      <span className="min-w-0">{status}</span>
+    </div>
+  );
 }
 
-function sameStringRecord(left: Record<string, string>, right: Record<string, string>) {
-  const leftKeys = Object.keys(left);
-  const rightKeys = Object.keys(right);
-  if (leftKeys.length !== rightKeys.length) {
-    return false;
+function SidebarPill({ children }: { children: string | number }) {
+  return (
+    <span className="ml-auto rounded-[6px] border bg-background px-1.5 text-[10px] font-medium text-muted-foreground group-data-[collapsible=icon]:hidden">
+      {children}
+    </span>
+  );
+}
+
+function formatScaleRatio(scale: number) {
+  if (scale >= 1) {
+    return `${formatRatioNumber(scale)}:1`;
   }
-  return rightKeys.every((key) => left[key] === right[key]);
+  return `1:${formatRatioNumber(1 / scale)}`;
+}
+
+function formatRatioNumber(value: number) {
+  return Number.isInteger(value) ? String(value) : value.toFixed(2);
+}
+
+function MetricRow({ label, value, metric }: { label: string; value: string; metric?: string }) {
+  return (
+    <div className="flex min-w-0 items-center justify-between gap-3 rounded-[6px] border bg-card px-2.5 py-1.5 text-xs">
+      <span className="shrink-0 text-muted-foreground">{label}</span>
+      <span className="min-w-0 truncate font-medium text-foreground" data-view-metric={metric}>
+        {value}
+      </span>
+    </div>
+  );
 }

@@ -13,6 +13,8 @@ FREECAD_NS = "https://www.freecad.org/wiki/index.php?title=Svg_Namespace"
 NS = {"svg": SVG_NS, "freecad": FREECAD_NS}
 TEXT_WIDTH_FACTOR = 0.62
 TEXT_PADDING_MM = 1.0
+TITLE_BLOCK_FONT_FAMILY = "Segoe UI"
+TITLE_BLOCK_TEXT_GROUP_IDS = {"title_block_labels", "title_block_data_fields"}
 
 
 @dataclass(frozen=True)
@@ -121,6 +123,7 @@ def render_svg_template(path: Path, substitutions: dict[str, str]) -> str:
         if replacement is not None:
             tspan.text = replacement
         _constrain_editable_text(element, editable_name, tspan.text or "", parent_map, rects_by_id, drawing_frame)
+    _apply_title_block_font(root)
     return ET.tostring(root, encoding="unicode")
 
 
@@ -144,6 +147,12 @@ def _remove_elements_by_id(root: ET.Element, ids: set[str]) -> None:
         for child in list(parent):
             if child.attrib.get("id") in ids:
                 parent.remove(child)
+
+
+def _apply_title_block_font(root: ET.Element) -> None:
+    for element in root.iter():
+        if element.attrib.get("id") in TITLE_BLOCK_TEXT_GROUP_IDS:
+            _set_style_value(element, "font-family", TITLE_BLOCK_FONT_FAMILY)
 
 
 def _constrain_editable_text(
@@ -245,6 +254,12 @@ def _parse_style(raw: str) -> dict[str, str]:
         key, value = entry.split(":", 1)
         styles[key.strip()] = value.strip()
     return styles
+
+
+def _set_style_value(element: ET.Element, key: str, value: str) -> None:
+    styles = _parse_style(element.attrib.get("style", ""))
+    styles[key] = value
+    element.set("style", ";".join(f"{style_key}:{style_value}" for style_key, style_value in styles.items()))
 
 
 def _estimate_text_width_mm(text: str, font_size_mm: float) -> float:

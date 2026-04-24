@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-import os
 import tempfile
-import threading
 from pathlib import Path
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
 from .contracts import DrawingCommand, DrawingPreview, OcctDrawingPreviewRequest, PipelineBundle
@@ -164,67 +162,6 @@ def apply_preview_commands(preview_id: str, payload: PreviewCommandsRequest) -> 
         return preview_service.build_preview(preview_id, updated)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"{type(exc).__name__}: {exc}") from exc
-
-
-_sw_connect_lock = threading.Lock()
-_sw_connected = False
-
-
-def _ensure_solidworks_connected() -> None:
-    global _sw_connected
-    if _sw_connected:
-        return
-    with _sw_connect_lock:
-        if _sw_connected:
-            return
-        try:
-            from pySldWrap import sw_tools  # noqa: WPS433 (import at runtime)
-        except ImportError as exc:
-            raise HTTPException(
-                status_code=500,
-                detail="pySldWrap is not installed in this Python environment.",
-            ) from exc
-        year = int(os.environ.get("SOLIDWORKS_YEAR", "2024"))
-        try:
-            sw_tools.connect_sw(year)
-        except Exception as exc:  # COM failures surface as generic errors
-            raise HTTPException(
-                status_code=500,
-                detail=f"Could not connect to SolidWorks {year}: {exc}",
-            ) from exc
-        _sw_connected = True
-
-
-@app.post("/api/convert/sldprt")
-async def convert_sldprt(file: UploadFile = File(...)) -> Response:
-    if not file.filename or not file.filename.lower().endswith(".sldprt"):
-        raise HTTPException(status_code=400, detail="Expected a .sldprt file")
-
-    _ensure_solidworks_connected()
-    from pySldWrap import sw_tools
-
-    data = await file.read()
-    with tempfile.TemporaryDirectory(prefix="sldprt-convert-") as tmp:
-        tmp_path = Path(tmp)
-        src = tmp_path / file.filename
-        src.write_bytes(data)
-        dst = tmp_path / (src.stem + ".STEP")
-
-        try:
-            result = sw_tools.export_to_step(src, dst)
-        except Exception as exc:
-            raise HTTPException(status_code=500, detail=f"SolidWorks export failed: {exc}") from exc
-
-        step_path = Path(result) if result else dst
-        if not step_path.exists():
-            raise HTTPException(status_code=500, detail="STEP export produced no file")
-        step_bytes = step_path.read_bytes()
-
-    return Response(
-        content=step_bytes,
-        media_type="application/step",
-        headers={"Content-Disposition": f'attachment; filename="{src.stem}.step"'},
-    )
 
 
 @app.post("/api/export/pdf")

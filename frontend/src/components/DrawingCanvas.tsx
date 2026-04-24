@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Move, ZoomIn, ZoomOut } from "lucide-react";
+import { createPortal } from "react-dom";
+import { Check, Move, ScanSearch, X, ZoomIn, ZoomOut } from "lucide-react";
 import { Circle, Group, Image as KonvaImage, Layer, Line, Path, Rect, Stage, Text } from "react-konva";
 import type { KonvaEventObject } from "konva/lib/Node";
 import type { Stage as KonvaStage } from "konva/lib/Stage";
 
 import { Button } from "./ui/button";
+import { Input } from "./ui/input";
 
 type Bounds2D = {
   x_min: number;
@@ -55,6 +57,29 @@ type PreviewDimension = {
   };
 };
 
+type PreviewTitleBlockField = {
+  id: string;
+  label: string;
+  value: string;
+  placement: {
+    x_mm: number;
+    y_mm: number;
+  };
+  width_mm: number;
+  editable: boolean;
+  autofill_key?: string | null;
+};
+
+type TitleBlockFieldMetadata = {
+  x_mm?: number | null;
+  y_mm?: number | null;
+  default_value?: string;
+  autofill_key?: string | null;
+  width_mm?: number | null;
+  font_size_mm?: number | null;
+  text_anchor?: string | null;
+};
+
 type SceneItem = {
   id: string;
   layer: string;
@@ -83,7 +108,9 @@ type DrawingPreview = {
       name: string;
       svg_source: string;
       source_path?: string | null;
+      editable_metadata?: Record<string, TitleBlockFieldMetadata>;
     };
+    title_block_fields: PreviewTitleBlockField[];
     dimensions: PreviewDimension[];
   };
   scene_graph: {
@@ -100,12 +127,17 @@ type DrawingCommand = {
   after: Record<string, unknown>;
 };
 
+type CommandApplyOptions = {
+  quiet?: boolean;
+};
+
 type DrawingCanvasProps = {
   preview: DrawingPreview;
   selectedViewId: string | null;
   busy?: boolean;
+  toolbarPortal?: HTMLElement | null;
   onSelectView: (viewId: string | null) => void;
-  onApplyCommands: (commands: DrawingCommand[]) => Promise<boolean> | boolean;
+  onApplyCommands: (commands: DrawingCommand[], options?: CommandApplyOptions) => Promise<boolean> | boolean;
 };
 
 type Sheet = DrawingPreview["document"]["sheet"];
@@ -115,11 +147,13 @@ type Item =
   | { id: string; type: "dimension"; dimension: PreviewDimension };
 
 type Marquee = { x: number; y: number; width: number; height: number };
+type NavigationMode = "select" | "pan" | "zoom-box";
 
 type Interaction =
   | null
   | { type: "pan"; startClient: Point; startViewBox: ViewBox }
   | { type: "marquee"; start: Point; current: Point }
+  | { type: "zoom-box"; start: Point; current: Point }
   | {
       type: "drag-selection";
       start: Point;
@@ -145,31 +179,65 @@ type ScreenRect = {
   height: number;
 };
 
-const GRID = 20;
-const CANVAS_HEIGHT = 780;
+type ActiveTitleBlockEdit = {
+  fieldId: string;
+  draft: string;
+};
 
-export function DrawingCanvas({ preview, selectedViewId, busy = false, onSelectView, onApplyCommands }: DrawingCanvasProps) {
+const CANVAS_HEIGHT = 560;
+const CANVAS_HEIGHT_STYLE = "clamp(300px, calc(100vh - 220px), 780px)";
+const TITLE_BLOCK_FONT_FAMILY = "Segoe UI";
+const TITLE_BLOCK_TEXT_GROUP_IDS = ["title_block_labels", "title_block_data_fields"];
+const MIN_ZOOM_BOX_WORLD_SIZE = 1;
+const ZOOM_BOX_PADDING = 1.05;
+
+export function DrawingCanvas({ preview, selectedViewId, busy = false, toolbarPortal, onSelectView, onApplyCommands }: DrawingCanvasProps) {
   const stageRef = useRef<KonvaStage | null>(null);
   const wrapperRef = useRef<HTMLDivElement | null>(null);
+  const titleBlockInputRef = useRef<HTMLInputElement | null>(null);
   const finishingInteractionRef = useRef(false);
   const sheet = preview.document.sheet;
   const [selectedIds, setSelectedIds] = useState<string[]>(selectedViewId ? [selectedViewId] : []);
   const [hoveredDimensionId, setHoveredDimensionId] = useState<string | null>(null);
+  const [hoveredTitleBlockFieldId, setHoveredTitleBlockFieldId] = useState<string | null>(null);
+  const [activeTitleBlockEdit, setActiveTitleBlockEdit] = useState<ActiveTitleBlockEdit | null>(null);
+  const [savingTitleBlockFieldId, setSavingTitleBlockFieldId] = useState<string | null>(null);
   const [interaction, setInteraction] = useState<Interaction>(null);
   const [commitDrafts, setCommitDrafts] = useState<CommitDrafts | null>(null);
-  const [navigationMode, setNavigationMode] = useState<"select" | "pan">("select");
+  const [titleBlockCommitDrafts, setTitleBlockCommitDrafts] = useState<Record<string, string>>({});
+  const [navigationMode, setNavigationMode] = useState<NavigationMode>("select");
   const [viewBox, setViewBox] = useState<ViewBox>(() => createSheetViewBox(sheet));
   const [viewportSize, setViewportSize] = useState({ width: 1, height: CANVAS_HEIGHT });
 
   const sceneLayers = preview.scene_graph.layers;
-  const exactTemplateSvg = preview.document.page_template?.svg_source ?? "";
+  const renderedTitleBlockFields = useMemo(
+    () =>
+      preview.document.title_block_fields.map((field) =>
+        titleBlockCommitDrafts[field.id] === undefined ? field : { ...field, value: titleBlockCommitDrafts[field.id] },
+      ),
+    [preview.document.title_block_fields, titleBlockCommitDrafts],
+  );
+  const exactTemplateSvg = useMemo(
+    () => applyTitleBlockFieldDraftsToSvg(preview.document.page_template?.svg_source ?? "", renderedTitleBlockFields),
+    [preview.document.page_template?.svg_source, renderedTitleBlockFields],
+  );
   const hasExactTemplate = Boolean(preview.document.page_template?.source_path && exactTemplateSvg.trim());
+  const templateImageKey = useMemo(() => hashString(exactTemplateSvg), [exactTemplateSvg]);
   const templateImage = useSvgTemplateImage(hasExactTemplate ? exactTemplateSvg : null);
 
   useEffect(() => {
     setViewBox(createSheetViewBox(sheet));
     setCommitDrafts(null);
+    setTitleBlockCommitDrafts({});
+    setActiveTitleBlockEdit(null);
+    setSavingTitleBlockFieldId(null);
   }, [preview.preview_id, sheet.height_mm, sheet.width_mm]);
+
+  useEffect(() => {
+    if (!activeTitleBlockEdit) return;
+    titleBlockInputRef.current?.focus();
+    titleBlockInputRef.current?.select();
+  }, [activeTitleBlockEdit?.fieldId]);
 
   useEffect(() => {
     const node = wrapperRef.current;
@@ -203,6 +271,19 @@ export function DrawingCanvas({ preview, selectedViewId, busy = false, onSelectV
     }
   }, [commitDrafts, preview]);
 
+  useEffect(() => {
+    if (Object.keys(titleBlockCommitDrafts).length === 0) return;
+    setTitleBlockCommitDrafts((current) => {
+      const next = Object.fromEntries(
+        Object.entries(current).filter(([id, value]) => {
+          const previewField = preview.document.title_block_fields.find((field) => field.id === id);
+          return previewField && previewField.value !== value;
+        }),
+      );
+      return sameStringRecord(current, next) ? current : next;
+    });
+  }, [preview.document.title_block_fields, titleBlockCommitDrafts]);
+
   const items = useMemo<Item[]>(
     () => [
       ...preview.views.map((view) => ({ id: view.id, type: "view" as const, view })),
@@ -218,10 +299,12 @@ export function DrawingCanvas({ preview, selectedViewId, busy = false, onSelectV
       const point = worldPointFromClient(event.clientX, event.clientY, wrapperRef.current, viewBox);
       if (!point) return;
 
-      if (interaction.type === "marquee") {
+      if (interaction.type === "marquee" || interaction.type === "zoom-box") {
         const next = { ...interaction, current: point };
         setInteraction(next);
-        selectByMarquee(normalizeRect(next.start, next.current));
+        if (next.type === "marquee") {
+          selectByMarquee(normalizeRect(next.start, next.current));
+        }
         return;
       }
 
@@ -236,8 +319,9 @@ export function DrawingCanvas({ preview, selectedViewId, busy = false, onSelectV
         const rect = node.getBoundingClientRect();
         const dxPx = event.clientX - interaction.startClient.x;
         const dyPx = event.clientY - interaction.startClient.y;
-        const dx = (dxPx / rect.width) * interaction.startViewBox.width;
-        const dy = (dyPx / rect.height) * interaction.startViewBox.height;
+        const startCamera = makeCamera(interaction.startViewBox, { width: rect.width, height: rect.height });
+        const dx = dxPx / startCamera.scaleX;
+        const dy = dyPx / startCamera.scaleY;
         setViewBox(
           clampViewBoxToSheet(
             {
@@ -264,8 +348,11 @@ export function DrawingCanvas({ preview, selectedViewId, busy = false, onSelectV
   }, [interaction, preview.views, preview.document.dimensions, sheet.height_mm, sheet.width_mm, viewBox]);
 
   const marquee = useMemo(() => {
-    if (!interaction || interaction.type !== "marquee") return null;
-    return normalizeRect(interaction.start, interaction.current);
+    if (!interaction || (interaction.type !== "marquee" && interaction.type !== "zoom-box")) return null;
+    return {
+      mode: interaction.type,
+      rect: normalizeRect(interaction.start, interaction.current),
+    };
   }, [interaction]);
 
   const viewDrafts = useMemo(() => {
@@ -276,14 +363,29 @@ export function DrawingCanvas({ preview, selectedViewId, busy = false, onSelectV
 
     const dx = interaction.current.x - interaction.start.x;
     const dy = interaction.current.y - interaction.start.y;
+    const primaryViewId = findPrimaryViewId(preview.views);
+    const primaryIsDragged = primaryViewId != null && primaryViewId in interaction.initialPositions;
+
     for (const view of preview.views) {
       const startPos = interaction.initialPositions[view.id];
       if (!startPos) continue;
+
+      let viewDx = dx;
+      let viewDy = dy;
+
+      if (!primaryIsDragged) {
+        if (view.kind === "right") {
+          viewDy = 0;
+        } else if ((view.kind === "front" || view.kind === "top") && view.id !== primaryViewId) {
+          viewDx = 0;
+        }
+      }
+
       drafts[view.id] = {
         ...view,
-        x_mm: round2(startPos.x + dx),
-        y_mm: round2(startPos.y + dy),
-        selection_bounds_mm: shiftBounds(view.selection_bounds_mm, dx, dy),
+        x_mm: round2(startPos.x + viewDx),
+        y_mm: round2(startPos.y + viewDy),
+        selection_bounds_mm: shiftBounds(view.selection_bounds_mm, viewDx, viewDy),
       };
     }
     return drafts;
@@ -350,7 +452,6 @@ export function DrawingCanvas({ preview, selectedViewId, busy = false, onSelectV
   }, [sceneLayers.centerlines, sceneLayers.notes, sceneLayers.sectionHatch, sceneLayers.viewGeometryHidden, sceneLayers.viewGeometryVisible]);
 
   const camera = useMemo(() => makeCamera(viewBox, viewportSize), [viewBox, viewportSize]);
-  const gridLines = useMemo(() => getGridLines(viewBox), [viewBox]);
   const sheetScreenRect = useMemo(
     () => worldRectToScreen({ x: 0, y: 0, width: sheet.width_mm, height: sheet.height_mm }, camera),
     [camera, sheet.height_mm, sheet.width_mm],
@@ -373,6 +474,25 @@ export function DrawingCanvas({ preview, selectedViewId, busy = false, onSelectV
       })),
     [camera, renderedDimensions, renderedViews],
   );
+
+  const titleBlockFieldOverlays = useMemo(
+    () =>
+      renderedTitleBlockFields
+        .filter((field) => field.editable)
+        .map((field) => ({
+          field,
+          rect: worldRectToScreen(getTitleBlockFieldBounds(field, preview.document.page_template.editable_metadata), camera),
+        })),
+    [camera, preview.document.page_template.editable_metadata, renderedTitleBlockFields],
+  );
+
+  const activeTitleBlockField = activeTitleBlockEdit
+    ? (renderedTitleBlockFields.find((field) => field.id === activeTitleBlockEdit.fieldId) ?? null)
+    : null;
+
+  const activeTitleBlockOverlay = activeTitleBlockEdit
+    ? (titleBlockFieldOverlays.find(({ field }) => field.id === activeTitleBlockEdit.fieldId) ?? null)
+    : null;
 
   function itemBounds(item: Item): Marquee {
     if (item.type === "view") {
@@ -405,6 +525,12 @@ export function DrawingCanvas({ preview, selectedViewId, busy = false, onSelectV
     setInteraction({ type: "pan", startClient: { x: clientX, y: clientY }, startViewBox: viewBox });
   }
 
+  function startZoomBox(clientX: number, clientY: number) {
+    const point = worldPointFromClient(clientX, clientY, wrapperRef.current, viewBox);
+    if (!point) return;
+    setInteraction({ type: "zoom-box", start: point, current: point });
+  }
+
   function shouldStartPan(button: number) {
     return button === 1 || (button === 0 && navigationMode === "pan");
   }
@@ -424,29 +550,11 @@ export function DrawingCanvas({ preview, selectedViewId, busy = false, onSelectV
     });
   }
 
-  function zoomFromClientPosition(clientX: number, clientY: number, deltaY: number) {
-    const node = wrapperRef.current;
-    if (!node) return;
-    const rect = node.getBoundingClientRect();
-    if (rect.width <= 0 || rect.height <= 0) return;
-    const sx = clamp((clientX - rect.left) / rect.width, 0, 1);
-    const sy = clamp((clientY - rect.top) / rect.height, 0, 1);
-    const zoomFactor = deltaY < 0 ? 0.9 : 1.1;
-    setViewBox((current) => {
-      const pointer = {
-        x: current.x + sx * current.width,
-        y: current.y + sy * current.height,
-      };
-      return clampViewBoxToSheet(
-        {
-          x: pointer.x - (pointer.x - current.x) * zoomFactor,
-          y: pointer.y - (pointer.y - current.y) * zoomFactor,
-          width: current.width * zoomFactor,
-          height: current.height * zoomFactor,
-        },
-        sheet,
-      );
-    });
+  function zoomToWorldRect(rect: Marquee) {
+    if (rect.width < MIN_ZOOM_BOX_WORLD_SIZE || rect.height < MIN_ZOOM_BOX_WORLD_SIZE) {
+      return;
+    }
+    setViewBox(fitViewBoxToRect(rect, viewportSize, sheet));
   }
 
   function onBackgroundPointerDown(clientX: number, clientY: number, button: number) {
@@ -456,6 +564,10 @@ export function DrawingCanvas({ preview, selectedViewId, busy = false, onSelectV
       return;
     }
     if (button !== 0) return;
+    if (navigationMode === "zoom-box") {
+      startZoomBox(clientX, clientY);
+      return;
+    }
     const point = worldPointFromClient(clientX, clientY, wrapperRef.current, viewBox);
     if (!point) return;
     setSelectedIds([]);
@@ -463,9 +575,9 @@ export function DrawingCanvas({ preview, selectedViewId, busy = false, onSelectV
     setInteraction({ type: "marquee", start: point, current: point });
   }
 
-  function beginDragSelection(nextSelected: string[], start: Point) {
+  function beginDragSelection(dragTargetIds: string[], start: Point) {
     const initialPositions: Record<string, Point> = {};
-    for (const id of nextSelected) {
+    for (const id of dragTargetIds) {
       const view = renderedViews.find((candidate) => candidate.id === id);
       const dimension = renderedDimensions.find((candidate) => candidate.id === id);
       if (view) {
@@ -475,7 +587,7 @@ export function DrawingCanvas({ preview, selectedViewId, busy = false, onSelectV
         initialPositions[id] = { x: dimension.placement.x_mm, y: dimension.placement.y_mm };
       }
     }
-    setInteraction({ type: "drag-selection", start, current: start, targetIds: nextSelected, initialPositions });
+    setInteraction({ type: "drag-selection", start, current: start, targetIds: dragTargetIds, initialPositions });
   }
 
   function onViewPointerDown(clientX: number, clientY: number, button: number, view: PreviewViewState) {
@@ -485,12 +597,17 @@ export function DrawingCanvas({ preview, selectedViewId, busy = false, onSelectV
       return;
     }
     if (button !== 0) return;
+    if (navigationMode === "zoom-box") {
+      startZoomBox(clientX, clientY);
+      return;
+    }
     const point = worldPointFromClient(clientX, clientY, wrapperRef.current, viewBox);
     if (!point) return;
     const nextSelected = selectedIds.includes(view.id) ? selectedIds : [view.id];
+    const dragTargetIds = getViewDragTargetIds(view, nextSelected, renderedViews);
     setSelectedIds(nextSelected);
     onSelectView(view.id);
-    beginDragSelection(nextSelected, point);
+    beginDragSelection(dragTargetIds, point);
   }
 
   function onDimensionPointerDown(clientX: number, clientY: number, button: number, dimension: PreviewDimension) {
@@ -500,12 +617,67 @@ export function DrawingCanvas({ preview, selectedViewId, busy = false, onSelectV
       return;
     }
     if (button !== 0) return;
+    if (navigationMode === "zoom-box") {
+      startZoomBox(clientX, clientY);
+      return;
+    }
     const point = worldPointFromClient(clientX, clientY, wrapperRef.current, viewBox);
     if (!point) return;
     const nextSelected = selectedIds.includes(dimension.id) ? selectedIds : [dimension.id];
     setSelectedIds(nextSelected);
     onSelectView(dimension.view_id);
     beginDragSelection(nextSelected, point);
+  }
+
+  function onTitleBlockFieldPointerDown(clientX: number, clientY: number, button: number, field: PreviewTitleBlockField) {
+    if (busy) return;
+    if (shouldStartPan(button)) {
+      startPan(clientX, clientY);
+      return;
+    }
+    if (button !== 0) return;
+    if (navigationMode === "zoom-box") {
+      startZoomBox(clientX, clientY);
+      return;
+    }
+    setInteraction(null);
+    setSelectedIds([]);
+    onSelectView(null);
+    setActiveTitleBlockEdit({ fieldId: field.id, draft: field.value });
+  }
+
+  async function applyTitleBlockFieldEdit() {
+    if (!activeTitleBlockEdit || !activeTitleBlockField || busy || savingTitleBlockFieldId) return;
+    const nextValue = activeTitleBlockEdit.draft;
+    if (nextValue === activeTitleBlockField.value) {
+      setActiveTitleBlockEdit(null);
+      return;
+    }
+    const persistedField = preview.document.title_block_fields.find((field) => field.id === activeTitleBlockField.id);
+    setTitleBlockCommitDrafts((current) => ({ ...current, [activeTitleBlockField.id]: nextValue }));
+    setSavingTitleBlockFieldId(activeTitleBlockField.id);
+    const applied = await onApplyCommands(
+      [
+        {
+          id: `cmd-title-field-${activeTitleBlockField.id}-${Date.now()}`,
+          kind: "SetTitleBlockField",
+          target_id: activeTitleBlockField.id,
+          before: { value: persistedField?.value ?? activeTitleBlockField.value },
+          after: { value: nextValue },
+        },
+      ],
+      { quiet: true },
+    );
+    if (applied !== false) {
+      setActiveTitleBlockEdit(null);
+    } else {
+      setTitleBlockCommitDrafts((current) => {
+        const next = { ...current };
+        delete next[activeTitleBlockField.id];
+        return next;
+      });
+    }
+    setSavingTitleBlockFieldId(null);
   }
 
   async function onPointerUp() {
@@ -557,16 +729,16 @@ export function DrawingCanvas({ preview, selectedViewId, busy = false, onSelectV
         return;
       }
 
+      if (interaction.type === "zoom-box") {
+        zoomToWorldRect(normalizeRect(interaction.start, interaction.current));
+        setInteraction(null);
+        return;
+      }
+
       setInteraction(null);
     } finally {
       finishingInteractionRef.current = false;
     }
-  }
-
-  function onWrapperWheel(event: React.WheelEvent<HTMLDivElement>) {
-    event.preventDefault();
-    event.stopPropagation();
-    zoomFromClientPosition(event.clientX, event.clientY, event.deltaY);
   }
 
   function onStageMouseDown(event: KonvaEventObject<MouseEvent>) {
@@ -574,43 +746,54 @@ export function DrawingCanvas({ preview, selectedViewId, busy = false, onSelectV
     onBackgroundPointerDown(event.evt.clientX, event.evt.clientY, event.evt.button);
   }
 
+  const toolbar = (
+    <div className="flex items-center gap-1 rounded-[8px] border bg-background/95 p-1 shadow-sm backdrop-blur">
+      <Button
+        type="button"
+        size="icon-sm"
+        variant={navigationMode === "pan" ? "default" : "outline"}
+        aria-label="Pan canvas"
+        aria-pressed={navigationMode === "pan"}
+        title="Pan canvas"
+        onClick={() => setNavigationMode((mode) => (mode === "pan" ? "select" : "pan"))}
+      >
+        <Move />
+      </Button>
+      <Button
+        type="button"
+        size="icon-sm"
+        variant={navigationMode === "zoom-box" ? "default" : "outline"}
+        aria-label="Zoom to rectangle"
+        aria-pressed={navigationMode === "zoom-box"}
+        title="Zoom to rectangle"
+        onClick={() => setNavigationMode((mode) => (mode === "zoom-box" ? "select" : "zoom-box"))}
+      >
+        <ScanSearch />
+      </Button>
+      <Button type="button" size="icon-sm" variant="outline" aria-label="Zoom in" title="Zoom in" onClick={() => zoomViewBox(0.9)}>
+        <ZoomIn />
+      </Button>
+      <Button type="button" size="icon-sm" variant="outline" aria-label="Zoom out" title="Zoom out" onClick={() => zoomViewBox(1.1)}>
+        <ZoomOut />
+      </Button>
+    </div>
+  );
+
   return (
-    <div className="grid gap-4">
+    <div className="grid min-h-0 gap-4">
+      {toolbarPortal ? createPortal(toolbar, toolbarPortal) : null}
       <div
         ref={wrapperRef}
-        className={`relative h-[780px] overflow-hidden rounded-2xl border border-slate-200 bg-white ${navigationMode === "pan" ? "cursor-grab" : ""}`}
-        onWheelCapture={onWrapperWheel}
+        data-preview-id={preview.preview_id}
+        className={`relative overflow-hidden rounded-[8px] border bg-white ${
+          navigationMode === "pan" ? "cursor-grab" : navigationMode === "zoom-box" ? "cursor-crosshair" : ""
+        }`}
+        style={{ height: CANVAS_HEIGHT_STYLE }}
       >
-        <div className="pointer-events-none absolute right-4 top-4 z-10">
-          <div className="pointer-events-auto flex items-center gap-1 rounded-xl border border-slate-200/90 bg-white/95 p-1 shadow-lg backdrop-blur">
-            <Button
-              type="button"
-              size="icon"
-              variant={navigationMode === "pan" ? "default" : "outline"}
-              aria-label="Pan canvas"
-              aria-pressed={navigationMode === "pan"}
-              title="Pan canvas"
-              onClick={() => setNavigationMode((mode) => (mode === "pan" ? "select" : "pan"))}
-            >
-              <Move />
-            </Button>
-            <Button type="button" size="icon" variant="outline" aria-label="Zoom in" title="Zoom in" onClick={() => zoomViewBox(0.9)}>
-              <ZoomIn />
-            </Button>
-            <Button type="button" size="icon" variant="outline" aria-label="Zoom out" title="Zoom out" onClick={() => zoomViewBox(1.1)}>
-              <ZoomOut />
-            </Button>
-          </div>
-        </div>
+        {!toolbarPortal ? <div className="pointer-events-auto absolute right-3 top-3 z-10">{toolbar}</div> : null}
 
         <Stage ref={stageRef} width={viewportSize.width} height={viewportSize.height} onMouseDown={onStageMouseDown}>
           <Layer listening={false}>
-            {gridLines.vertical.map((x) => (
-              <Line key={`grid-v-${x}`} points={[x, 0, x, viewportSize.height]} stroke="#e2e8f0" strokeWidth={1} />
-            ))}
-            {gridLines.horizontal.map((y) => (
-              <Line key={`grid-h-${y}`} points={[0, y, viewportSize.width, y]} stroke="#e2e8f0" strokeWidth={1} />
-            ))}
             <Rect
               x={sheetScreenRect.x}
               y={sheetScreenRect.y}
@@ -622,6 +805,7 @@ export function DrawingCanvas({ preview, selectedViewId, busy = false, onSelectV
             />
             {templateImage ? (
               <KonvaImage
+                key={`template-${templateImageKey}`}
                 x={sheetScreenRect.x}
                 y={sheetScreenRect.y}
                 width={sheetScreenRect.width}
@@ -682,12 +866,12 @@ export function DrawingCanvas({ preview, selectedViewId, busy = false, onSelectV
 
             {marquee ? (
               <Rect
-                x={worldToScreen({ x: marquee.x, y: marquee.y }, camera).x}
-                y={worldToScreen({ x: marquee.x, y: marquee.y }, camera).y}
-                width={marquee.width * camera.scaleX}
-                height={marquee.height * camera.scaleY}
-                fill="#3b82f620"
-                stroke="#2563eb"
+                x={worldToScreen({ x: marquee.rect.x, y: marquee.rect.y }, camera).x}
+                y={worldToScreen({ x: marquee.rect.x, y: marquee.rect.y }, camera).y}
+                width={marquee.rect.width * camera.scaleX}
+                height={marquee.rect.height * camera.scaleY}
+                fill={marquee.mode === "zoom-box" ? "#0f172a14" : "#3b82f620"}
+                stroke={marquee.mode === "zoom-box" ? "#0f172a" : "#2563eb"}
                 dash={[8, 6]}
                 strokeWidth={1.5}
               />
@@ -701,13 +885,16 @@ export function DrawingCanvas({ preview, selectedViewId, busy = false, onSelectV
             <div
               key={`overlay-view-${view.id}`}
               data-hitbox-for={view.id}
+              data-view-kind={view.kind}
+              data-view-x-mm={view.x_mm}
+              data-view-y-mm={view.y_mm}
               className="pointer-events-auto absolute"
               style={{
                 left: rect.x,
                 top: rect.y,
                 width: rect.width,
                 height: rect.height,
-                cursor: "grab",
+                cursor: navigationMode === "zoom-box" ? "crosshair" : "grab",
                 background: "transparent",
               }}
               onPointerDown={(event) => {
@@ -731,7 +918,7 @@ export function DrawingCanvas({ preview, selectedViewId, busy = false, onSelectV
                   top: rect.y,
                   width: rect.width,
                   height: rect.height,
-                  cursor: navigationMode === "pan" ? "grab" : "pointer",
+                  cursor: navigationMode === "zoom-box" ? "crosshair" : navigationMode === "pan" ? "grab" : "pointer",
                   background: "transparent",
                 }}
                 onPointerDown={(event) => {
@@ -743,7 +930,112 @@ export function DrawingCanvas({ preview, selectedViewId, busy = false, onSelectV
               />
             );
           })}
+
+          {titleBlockFieldOverlays.map(({ field, rect }) => {
+            const active = activeTitleBlockEdit?.fieldId === field.id;
+            const hovered = hoveredTitleBlockFieldId === field.id;
+            return (
+              <button
+                key={`overlay-title-block-${field.id}`}
+                type="button"
+                data-title-block-hitbox={field.id}
+                className={`pointer-events-auto absolute rounded-[3px] border text-left transition-colors ${
+                  active
+                    ? "border-blue-500 bg-blue-500/10"
+                    : hovered
+                      ? "border-blue-400 bg-blue-400/10"
+                      : "border-transparent bg-transparent"
+                }`}
+                style={{
+                  left: rect.x,
+                  top: rect.y,
+                  width: Math.max(rect.width, 18),
+                  height: Math.max(rect.height, 14),
+                  cursor: navigationMode === "zoom-box" ? "crosshair" : navigationMode === "pan" ? "grab" : "text",
+                }}
+                aria-label={`Edit ${field.label}`}
+                title={`Edit ${field.label}`}
+                disabled={busy}
+                onPointerDown={(event) => {
+                  event.stopPropagation();
+                  onTitleBlockFieldPointerDown(event.clientX, event.clientY, event.button, field);
+                }}
+                onPointerEnter={() => setHoveredTitleBlockFieldId(field.id)}
+                onPointerLeave={() => setHoveredTitleBlockFieldId((current) => (current === field.id ? null : current))}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    setActiveTitleBlockEdit({ fieldId: field.id, draft: field.value });
+                  }
+                }}
+              />
+            );
+          })}
         </div>
+
+        {activeTitleBlockEdit && activeTitleBlockField && activeTitleBlockOverlay ? (
+          <div
+            className="absolute z-20 rounded-lg border border-slate-200 bg-white p-3 shadow-xl"
+            style={getTitleBlockPopupStyle(activeTitleBlockOverlay.rect, viewportSize)}
+            data-title-block-popup={activeTitleBlockField.id}
+            onPointerDown={(event) => event.stopPropagation()}
+            onWheel={(event) => event.stopPropagation()}
+          >
+            <div className="mb-2 flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="truncate text-xs font-semibold tracking-[0.14em] text-slate-500 uppercase">{activeTitleBlockField.label}</p>
+                <p className="truncate text-sm font-medium text-slate-900">{activeTitleBlockField.value || "Empty field"}</p>
+              </div>
+              <Button
+                type="button"
+                size="icon"
+                variant="ghost"
+                className="h-7 w-7"
+                aria-label="Close title block editor"
+                onClick={() => setActiveTitleBlockEdit(null)}
+              >
+                <X />
+              </Button>
+            </div>
+            <Input
+              ref={titleBlockInputRef}
+              value={activeTitleBlockEdit.draft}
+              disabled={busy || savingTitleBlockFieldId === activeTitleBlockField.id}
+              autoComplete="off"
+              data-title-block-popup-input={activeTitleBlockField.id}
+              onChange={(event) => setActiveTitleBlockEdit((current) => (current ? { ...current, draft: event.target.value } : current))}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  void applyTitleBlockFieldEdit();
+                }
+                if (event.key === "Escape") {
+                  event.preventDefault();
+                  setActiveTitleBlockEdit(null);
+                }
+              }}
+            />
+            <div className="mt-3 flex items-center justify-end gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setActiveTitleBlockEdit(null)}
+                disabled={busy || savingTitleBlockFieldId === activeTitleBlockField.id}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                onClick={() => void applyTitleBlockFieldEdit()}
+                disabled={busy || savingTitleBlockFieldId === activeTitleBlockField.id || activeTitleBlockEdit.draft === activeTitleBlockField.value}
+                data-title-block-popup-apply={activeTitleBlockField.id}
+              >
+                <Check />
+                Apply
+              </Button>
+            </div>
+          </div>
+        ) : null}
       </div>
     </div>
   );
@@ -776,6 +1068,104 @@ function useSvgTemplateImage(svgSource: string | null) {
   }, [dataUrl]);
 
   return image;
+}
+
+function applyTitleBlockFieldDraftsToSvg(svgSource: string, fields: PreviewTitleBlockField[]) {
+  if (!svgSource.trim() || fields.length === 0) {
+    return applyTitleBlockFontToSvg(svgSource);
+  }
+
+  try {
+    const parser = new DOMParser();
+    const document = parser.parseFromString(svgSource, "image/svg+xml");
+
+    if (document.querySelector("parsererror")) {
+      return svgSource;
+    }
+
+    const valuesByEditableName = new Map(fields.map((field) => [editableNameFromTitleBlockFieldId(field.id), field.value]));
+    let changed = false;
+
+    for (const element of Array.from(document.querySelectorAll("text"))) {
+      const editableName = element.getAttribute("freecad:editable") ?? element.getAttributeNS("http://www.freecad.org/wiki/index.php?title=Svg_Namespace", "editable");
+      if (!editableName || !valuesByEditableName.has(editableName)) {
+        continue;
+      }
+
+      let tspan = element.querySelector("tspan");
+      if (!tspan) {
+        tspan = document.createElementNS("http://www.w3.org/2000/svg", "tspan");
+        element.appendChild(tspan);
+      }
+      const nextText = valuesByEditableName.get(editableName) ?? "";
+      if (tspan.textContent !== nextText) {
+        tspan.textContent = nextText;
+        changed = true;
+      }
+    }
+
+    const fontChanged = applyTitleBlockFontToDocument(document);
+    return changed || fontChanged ? new XMLSerializer().serializeToString(document) : svgSource;
+  } catch {
+    return applyTitleBlockFontToSvg(svgSource);
+  }
+}
+
+function editableNameFromTitleBlockFieldId(fieldId: string) {
+  return fieldId.startsWith("tb-") ? fieldId.slice(3) : fieldId;
+}
+
+function applyTitleBlockFontToSvg(svgSource: string) {
+  if (!svgSource.trim()) {
+    return svgSource;
+  }
+
+  try {
+    const parser = new DOMParser();
+    const document = parser.parseFromString(svgSource, "image/svg+xml");
+    if (document.querySelector("parsererror")) {
+      return svgSource;
+    }
+    return applyTitleBlockFontToDocument(document) ? new XMLSerializer().serializeToString(document) : svgSource;
+  } catch {
+    return svgSource;
+  }
+}
+
+function applyTitleBlockFontToDocument(document: Document) {
+  let changed = false;
+  for (const id of TITLE_BLOCK_TEXT_GROUP_IDS) {
+    const element = document.getElementById(id);
+    if (!element) continue;
+    const currentStyle = element.getAttribute("style") ?? "";
+    const nextStyle = setStyleValue(currentStyle, "font-family", TITLE_BLOCK_FONT_FAMILY);
+    if (nextStyle !== currentStyle) {
+      element.setAttribute("style", nextStyle);
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+function setStyleValue(style: string, key: string, value: string) {
+  const entries = style
+    .split(";")
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .map((entry) => entry.split(":"));
+  const styles = new Map(entries.filter((entry) => entry.length >= 2).map(([styleKey, ...styleValue]) => [styleKey.trim(), styleValue.join(":").trim()]));
+  styles.set(key, value);
+  return Array.from(styles.entries())
+    .map(([styleKey, styleValue]) => `${styleKey}:${styleValue}`)
+    .join(";");
+}
+
+function hashString(value: string) {
+  let hash = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash * 31 + value.charCodeAt(index)) | 0;
+  }
+  return hash.toString(36);
 }
 
 function sanitizeTemplateSvg(svgSource: string | null) {
@@ -977,18 +1367,44 @@ function clampViewBoxToSheet(viewBox: ViewBox, sheet: Sheet): ViewBox {
   };
 }
 
+function fitViewBoxToRect(rect: Marquee, viewportSize: { width: number; height: number }, sheet: Sheet): ViewBox {
+  const center = {
+    x: rect.x + rect.width / 2,
+    y: rect.y + rect.height / 2,
+  };
+  const viewportAspect = viewportSize.height > 0 ? viewportSize.width / viewportSize.height : 1;
+  let width = Math.max(rect.width * ZOOM_BOX_PADDING, MIN_ZOOM_BOX_WORLD_SIZE);
+  let height = Math.max(rect.height * ZOOM_BOX_PADDING, MIN_ZOOM_BOX_WORLD_SIZE);
+  const rectAspect = width / height;
+
+  if (rectAspect > viewportAspect) {
+    height = width / viewportAspect;
+  } else {
+    width = height * viewportAspect;
+  }
+
+  return clampViewBoxToSheet(
+    {
+      x: center.x - width / 2,
+      y: center.y - height / 2,
+      width,
+      height,
+    },
+    sheet,
+  );
+}
+
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
 }
 
 function makeCamera(viewBox: ViewBox, viewportSize: { width: number; height: number }): Camera {
-  const scaleX = viewportSize.width / viewBox.width;
-  const scaleY = viewportSize.height / viewBox.height;
+  const scale = Math.min(viewportSize.width / viewBox.width, viewportSize.height / viewBox.height);
   return {
-    scaleX,
-    scaleY,
-    offsetX: -viewBox.x * scaleX,
-    offsetY: -viewBox.y * scaleY,
+    scaleX: scale,
+    scaleY: scale,
+    offsetX: (viewportSize.width - viewBox.width * scale) / 2 - viewBox.x * scale,
+    offsetY: (viewportSize.height - viewBox.height * scale) / 2 - viewBox.y * scale,
   };
 }
 
@@ -1012,11 +1428,47 @@ function worldRectToScreen(rect: Marquee, camera: Camera): ScreenRect {
 function worldPointFromClient(clientX: number, clientY: number, node: HTMLDivElement | null, viewBox: ViewBox) {
   if (!node) return null;
   const rect = node.getBoundingClientRect();
-  const sx = (clientX - rect.left) / rect.width;
-  const sy = (clientY - rect.top) / rect.height;
+  if (rect.width <= 0 || rect.height <= 0) return null;
+  const camera = makeCamera(viewBox, { width: rect.width, height: rect.height });
   return {
-    x: viewBox.x + sx * viewBox.width,
-    y: viewBox.y + sy * viewBox.height,
+    x: (clientX - rect.left - camera.offsetX) / camera.scaleX,
+    y: (clientY - rect.top - camera.offsetY) / camera.scaleY,
+  };
+}
+
+function getTitleBlockFieldBounds(field: PreviewTitleBlockField, metadata?: Record<string, TitleBlockFieldMetadata>): Marquee {
+  const fieldMetadata = findTitleBlockFieldMetadata(field, metadata);
+  const x = fieldMetadata?.x_mm ?? field.placement.x_mm;
+  const y = fieldMetadata?.y_mm ?? field.placement.y_mm;
+  const width = Math.max(fieldMetadata?.width_mm ?? field.width_mm ?? 28, 8);
+  const fontSize = Math.max(fieldMetadata?.font_size_mm ?? 4, 2.5);
+  const height = Math.max(fontSize * 2.1, 5);
+  const anchor = fieldMetadata?.text_anchor ?? "start";
+  const left = anchor === "middle" ? x - width / 2 : anchor === "end" ? x - width : x;
+  return {
+    x: left - 1.5,
+    y: y - height * 0.72,
+    width: width + 3,
+    height,
+  };
+}
+
+function findTitleBlockFieldMetadata(field: PreviewTitleBlockField, metadata?: Record<string, TitleBlockFieldMetadata>) {
+  if (!metadata) return undefined;
+  if (metadata[field.id]) return metadata[field.id];
+  const editableName = field.id.startsWith("tb-") ? field.id.slice(3) : field.id;
+  return metadata[editableName];
+}
+
+function getTitleBlockPopupStyle(rect: ScreenRect, viewportSize: { width: number; height: number }): React.CSSProperties {
+  const width = Math.min(300, Math.max(viewportSize.width - 24, 220));
+  const gap = 8;
+  const preferredTop = rect.y - 154;
+  const top = preferredTop >= 12 ? preferredTop : rect.y + rect.height + gap;
+  return {
+    width,
+    left: clamp(rect.x + Math.min(rect.width, 48), 12, Math.max(viewportSize.width - width - 12, 12)),
+    top: clamp(top, 12, Math.max(viewportSize.height - 172, 12)),
   };
 }
 
@@ -1031,6 +1483,73 @@ function normalizeRect(a: Point, b: Point): Marquee {
 
 function rectsIntersect(a: Marquee, b: Marquee) {
   return a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
+}
+
+function getViewDragTargetIds(activeView: PreviewViewState, selectedIds: string[], views: PreviewViewState[]) {
+  const targetIds = new Set(selectedIds);
+  const primaryViewId = findPrimaryViewId(views);
+  if (activeView.id !== primaryViewId) {
+    return Array.from(targetIds);
+  }
+
+  for (const view of views) {
+    if (isLinkedOrthographicView(view, primaryViewId)) {
+      targetIds.add(view.id);
+    }
+  }
+  return Array.from(targetIds);
+}
+
+function isLinkedOrthographicView(view: PreviewViewState, primaryViewId: string | null) {
+  if (!primaryViewId || view.kind === "isometric") {
+    return false;
+  }
+  if (view.id === primaryViewId || view.kind === "right") {
+    return true;
+  }
+  return view.kind === "front" || view.kind === "top";
+}
+
+function findPrimaryViewId(views: PreviewViewState[]) {
+  const candidates = views.filter((view) => view.kind === "front" || view.kind === "top");
+  if (candidates.length === 0) {
+    return null;
+  }
+  if (candidates.length === 1) {
+    return candidates[0].id;
+  }
+
+  const rightView = views.find((view) => view.kind === "right");
+  const scored = candidates.map((view) => {
+    const verticalCompanion = candidates.find((candidate) => candidate.id !== view.id);
+    let score = 0;
+    if (rightView && nearlyEqual(view.y_mm, rightView.y_mm)) {
+      score += 3;
+    }
+    if (verticalCompanion && nearlyEqual(view.x_mm, verticalCompanion.x_mm)) {
+      score += 2;
+    }
+    if (view.kind === "front") {
+      score += 1;
+    }
+    return { view, score };
+  });
+
+  scored.sort((left, right) => right.score - left.score);
+  return scored[0].view.id;
+}
+
+function nearlyEqual(left: number, right: number, tolerance = 0.75) {
+  return Math.abs(left - right) <= tolerance;
+}
+
+function sameStringRecord(left: Record<string, string>, right: Record<string, string>) {
+  const leftKeys = Object.keys(left);
+  const rightKeys = Object.keys(right);
+  if (leftKeys.length !== rightKeys.length) {
+    return false;
+  }
+  return rightKeys.every((key) => left[key] === right[key]);
 }
 
 function previewMatchesCommitDrafts(preview: DrawingPreview, commitDrafts: CommitDrafts) {
@@ -1119,22 +1638,6 @@ function getDimensionBounds(dimension: PreviewDimension, views: PreviewViewState
 
 function round2(value: number) {
   return Math.round(value * 100) / 100;
-}
-
-function getGridLines(viewBox: ViewBox) {
-  const minX = Math.floor(viewBox.x / GRID) * GRID;
-  const maxX = Math.ceil((viewBox.x + viewBox.width) / GRID) * GRID;
-  const minY = Math.floor(viewBox.y / GRID) * GRID;
-  const maxY = Math.ceil((viewBox.y + viewBox.height) / GRID) * GRID;
-  const vertical: number[] = [];
-  const horizontal: number[] = [];
-  for (let x = minX; x <= maxX; x += GRID) {
-    vertical.push(x);
-  }
-  for (let y = minY; y <= maxY; y += GRID) {
-    horizontal.push(y);
-  }
-  return { vertical, horizontal };
 }
 
 function getDimensionOverlayAnchor(dimension: PreviewDimension, views: PreviewViewState[]) {

@@ -6,8 +6,8 @@ FILE_NAME ('cube.STEP',
     '2026-04-23T20:26:44',
     ( '' ),
     ( '' ),
-    'SwSTEP 2.0',
-    'SolidWorks 2024',
+    'autodrawing fixture exporter',
+    'autodrawing',
     '' );
 FILE_SCHEMA (( 'AUTOMOTIVE_DESIGN' ));
 ENDSEC;

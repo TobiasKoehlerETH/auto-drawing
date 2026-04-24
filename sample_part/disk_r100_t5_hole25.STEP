@@ -6,8 +6,8 @@ FILE_NAME ('disk_r100_t5_hole25.STEP',
     '2026-04-23T20:25:15',
     ( '' ),
     ( '' ),
-    'SwSTEP 2.0',
-    'SolidWorks 2024',
+    'autodrawing fixture exporter',
+    'autodrawing',
     '' );
 FILE_SCHEMA (( 'AUTOMOTIVE_DESIGN' ));
 ENDSEC;

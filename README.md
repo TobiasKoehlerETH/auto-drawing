@@ -2,24 +2,11 @@
 
 OSS-first automatic drawing creation from STEP files, with a browser-based editor and HTML/SVG/PDF export.
 
-The repo now has two lanes:
-
-- **OSS web lane**: STEP import -> canonical model -> projected drawing -> interactive web editor -> HTML/PDF export
-- **Legacy SolidWorks lane**: the earlier COM automation prototype, preserved as reference material for a future native `.slddrw` worker
-
 ## Current architecture
-
-### OSS web lane
 
 - Python domain and API layer in `autodrawing/`
 - React + TypeScript editor in `frontend/`
 - Fixture corpus and schema-first tests in `fixtures/` and `tests/`
-
-### Legacy SolidWorks lane
-
-- COM automation prototype in `autodrawing/engine.py`
-- helper script in `scripts/generate_guideline_drawing.py`
-- design notes in `learnings.md` and `SOLIDWORKS_INTERFACE_FINDINGS.md`
 
 ## Repo layout
 
@@ -29,8 +16,7 @@ The repo now has two lanes:
 | `frontend/` | React + TypeScript drawing editor with SVG sheet canvas and three.js review pane |
 | `fixtures/` | STEP fixtures used by the OSS pipeline tests |
 | `guidelines/` | ISO/DIN drafting rules and drafting references |
-| `tests/` | importer, schema, command, and legacy feature extraction tests |
-| `scripts/` | legacy SolidWorks helper scripts |
+| `tests/` | importer, schema, command, preview, and TechDraw template tests |
 
 ## Requirements
 
@@ -91,4 +77,3 @@ python -m unittest discover -s tests -v
 
 - The STEP importer is schema-first and deterministic, with a clean seam for swapping in pythonOCC/OCCT later.
 - The current PDF export path uses a Puppeteer script in `frontend/scripts/export-pdf.mjs`.
-- Native SolidWorks `.slddrw` export is still intentionally outside the OSS runtime path.

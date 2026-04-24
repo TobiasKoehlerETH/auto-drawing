@@ -5,10 +5,10 @@ from collections.abc import Iterable
 from .contracts import Bounds2D, CanonicalCadModel, FeatureHint, ProjectionBundle, ProjectionType, ViewPlacement
 from .standards import (
     DEFAULT_VIEW_GAP_MM,
-    ISOMETRIC_AREA_MM,
     ISOMETRIC_VIEW_SCALE,
     MAIN_VIEW_AREA_MM,
     ORTHOGRAPHIC_VIEW_SCALE,
+    TITLE_BLOCK_BOUNDS_MM,
 )
 
 
@@ -109,11 +109,16 @@ def plan_view_pack(
 
     if iso:
         iso_scale = default_view_scale("isometric")
-        iso_left = ISOMETRIC_AREA_MM["x"] + max((ISOMETRIC_AREA_MM["width"] - iso.bounds.width * iso_scale) / 2.0, 0.0)
-        iso_top = ISOMETRIC_AREA_MM["y"] + max((ISOMETRIC_AREA_MM["height"] - iso.bounds.height * iso_scale) / 2.0, 0.0)
+        iso_width = iso.bounds.width * iso_scale
+        title_right = TITLE_BLOCK_BOUNDS_MM["x"] + TITLE_BLOCK_BOUNDS_MM["width"]
+        title_top = TITLE_BLOCK_BOUNDS_MM["y"]
+        iso_left = title_right - iso_width
+        if iso_width > TITLE_BLOCK_BOUNDS_MM["width"]:
+            iso_left = TITLE_BLOCK_BOUNDS_MM["x"]
+        iso_bottom = title_top - DEFAULT_VIEW_GAP_MM / 2.0
         placements["isometric"] = ViewPlacement(
-            x_mm=iso_left,
-            y_mm=iso_top + iso.bounds.height * iso_scale,
+            x_mm=iso_left - iso.bounds.x_min * iso_scale,
+            y_mm=iso_bottom + iso.bounds.y_min * iso_scale,
             scale=iso_scale,
         )
 

@@ -147,6 +147,20 @@ class SceneGraphService:
                     meta={"view_id": view.id},
                 )
             )
+            if geometry.kind == "isometric":
+                layers["notes"].append(
+                    SceneItem(
+                        id=f"{view.id}-scale",
+                        layer="notes",
+                        kind="text",
+                        group_id=view.id,
+                        x=view.placement.x_mm,
+                        y=max(bounds.y_min - 12.0, 4.0),
+                        text=_format_scale_text(view.placement.scale),
+                        classes=["view-label", "view-scale"],
+                        meta={"view_id": view.id},
+                    )
+                )
             layers["selectionOverlay"].append(
                 SceneItem(
                     id=f"{view.id}-selection",
@@ -379,3 +393,12 @@ class SceneGraphService:
 
     def _project_point(self, point: Point2D, origin_x: float, origin_y: float, scale: float) -> Point2D:
         return Point2D(x=origin_x + point.x * scale, y=origin_y - point.y * scale)
+
+
+def _format_scale_text(scale: float) -> str:
+    rounded = round(scale, 2)
+    if rounded <= 0:
+        return "Scale 1 : 1"
+    if rounded < 1:
+        return f"Scale 1 : {round(1 / rounded, 2):g}"
+    return f"Scale {rounded:g} : 1"

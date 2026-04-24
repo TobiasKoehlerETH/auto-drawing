@@ -23,7 +23,6 @@ confidence: high
 - Space dimension lines, leaders, and value text so they do not overlap each other.
 - Do not use bracketed or parenthesized dimension values.
 - Duplicate controlling dimensions are forbidden because they overdefine the drawing.
-- If SolidWorks native auto-dimensioning creates parenthesized display text, clean the display-dimension properties before accepting the sheet.
 
 ## Common dimensioning methods
 
@@ -103,17 +102,6 @@ SØ30
 - If auto-placement creates collisions, move or prune dimensions until the sheet reads cleanly at a glance.
 - If a value appears in brackets or parentheses, convert it to a normal controlling dimension style or remove it.
 
-## Verified SolidWorks-native baseline for this repo
-
-- Try part-side DimXpert first, but do not assume it will succeed on the sample part.
-- In the general single-part tool v1, the strongest automatic result still comes from drawing-side native tools:
-  - import dimensions marked for drawing when available
-  - then apply family-aware drawing auto-dimensioning to the clearest manufacturing views
-  - then run a duplicate-dimension dedupe pass so controlling requirements appear once only
-  - then normalize display-dimension settings to remove visible parentheses and dual-format clutter
-- Treat this as a stronger automatic baseline, not as a final guarantee of a clean manufacturing sheet.
-
 ## Current repo limitation
 
-- DimXpert is still a top-priority native tool to attempt, but it is not yet a verified working source of usable sample-part annotations in this repository.
-- The current SolidWorks-native pass can produce a much better baseline automatically, but exported previews still need visual review for crowding, overlap, and family-specific completeness such as sections or details.
+- Generated previews still need visual review for crowding, overlap, and family-specific completeness such as sections or details.

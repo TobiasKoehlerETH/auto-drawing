@@ -11,30 +11,15 @@ The emphasis is now:
 
 ## Current Automation Status
 
-The repo now targets a general single-part drawing tool in Python, built on the proven local SolidWorks COM path already exercised against the sample part.
+The repo targets a STEP-based automatic drawing tool with a Python backend, a browser editor, and TechDraw-style template metadata.
 
-Current v1 behavior:
+Current behavior:
 
-- accepts `SLDPRT` and `STEP`
-- creates a fresh `.SLDDRW`, `.pdf`, `.preview.png`, `.trace.log`, and `validation.json` on every run
-- classifies the input into a conservative family before choosing the drawing layout:
-  - `prismatic`
-  - `plate`
-  - `turned`
-  - `imported`
-  - `unsupported`
+- accepts STEP / STP input
+- creates a canonical model, projected drawing document, scene graph, and preview payload
 - keeps A3 / first-angle / metric as the default sheet standard
-- uses hidden-lines-visible orthographic views and a shaded-only isometric recognition view
-- tries part-side DimXpert first for native `SLDPRT`, but only treats it as valid if it creates real usable annotations
-- relies on drawing-side dimension import and family-aware auto-dimensioning as the practical baseline
-- runs a duplicate-dimension dedupe pass before completion so controlling requirements appear once only
-- writes a machine-readable validation result with `pass`, `warning`, `needs_review`, or `fail`
-
-Current limitation:
-
-- imported parts, unsupported feature families, and parts that likely need section/detail views are intentionally downgraded to `needs_review` rather than overclaimed as complete manufacturing drawings
-
-Evidence-heavy implementation notes for the latest verified passes live in the repo root file `C:\Code\auto-drawing\learnings.md`.
+- uses line-based orthographic views and a compact isometric recognition view
+- writes validation data with `pass`, `warning`, `needs_review`, or `fail`
 
 ## Scope
 
@@ -49,7 +34,7 @@ The guides also explain common cross-market variants when they are useful to rec
 
 ## Project Overrides
 
-For the current `auto-drawing` SolidWorks automation target, also enforce these project-specific checks:
+For the current `auto-drawing` pipeline, also enforce these project-specific checks:
 
 - Use `MMGS` document units and show dimensions in `mm`.
 - Keep the sheet background white.
@@ -65,7 +50,6 @@ For the current `auto-drawing` SolidWorks automation target, also enforce these 
 - Avoid duplicate dimension text or dual-unit display.
 - Run a duplicate-dimension dedupe pass before accepting the sheet.
 - Recreate the drawing from scratch on each verification pass so the exported preview reflects the current automation, not stale dimensions.
-- Prefer a disposable working part copy for native part-side dimension experiments; keep the original sample part unchanged.
 
 ## Folder map
 

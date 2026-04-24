@@ -77,24 +77,24 @@ class OcctProjectionAdapter(ProjectionAdapter):
             )
             right = _OrthographicAxes(
                 kind="right",
-                width_axis=broad_face.height_axis,
-                height_axis=broad_face.depth_axis,
+                width_axis=self._negate_axis(broad_face.depth_axis),
+                height_axis=broad_face.height_axis,
                 depth_axis=broad_face.width_axis,
-                width=self._axis_size(bbox, broad_face.height_axis),
-                height=self._axis_size(bbox, broad_face.depth_axis),
+                width=self._axis_size(bbox, broad_face.depth_axis),
+                height=self._axis_size(bbox, broad_face.height_axis),
             )
             return {"front": front, "top": top, "right": right}
 
         front = broad_face
         if (front.width_axis, front.height_axis, front.depth_axis) == ("x", "y", "z"):
             top = _OrthographicAxes(kind="top", width_axis="x", height_axis="z", depth_axis="y", width=bbox.x, height=bbox.z)
-            right = _OrthographicAxes(kind="right", width_axis="y", height_axis="z", depth_axis="x", width=bbox.y, height=bbox.z)
+            right = _OrthographicAxes(kind="right", width_axis="-z", height_axis="y", depth_axis="x", width=bbox.z, height=bbox.y)
         elif (front.width_axis, front.height_axis, front.depth_axis) == ("x", "z", "y"):
             top = _OrthographicAxes(kind="top", width_axis="x", height_axis="y", depth_axis="z", width=bbox.x, height=bbox.y)
-            right = _OrthographicAxes(kind="right", width_axis="y", height_axis="z", depth_axis="x", width=bbox.y, height=bbox.z)
+            right = _OrthographicAxes(kind="right", width_axis="-y", height_axis="z", depth_axis="x", width=bbox.y, height=bbox.z)
         else:
             top = _OrthographicAxes(kind="top", width_axis="y", height_axis="x", depth_axis="z", width=bbox.y, height=bbox.x)
-            right = _OrthographicAxes(kind="right", width_axis="x", height_axis="z", depth_axis="y", width=bbox.x, height=bbox.z)
+            right = _OrthographicAxes(kind="right", width_axis="-x", height_axis="z", depth_axis="y", width=bbox.x, height=bbox.z)
 
         front = _OrthographicAxes(
             kind="front",
@@ -107,7 +107,11 @@ class OcctProjectionAdapter(ProjectionAdapter):
         return {"front": front, "top": top, "right": right}
 
     def _axis_size(self, bbox: Point3D, axis: str) -> float:
-        return bbox.x if axis == "x" else bbox.y if axis == "y" else bbox.z
+        clean = axis.lstrip("-")
+        return bbox.x if clean == "x" else bbox.y if clean == "y" else bbox.z
+
+    def _negate_axis(self, axis: str) -> str:
+        return axis[1:] if axis.startswith("-") else f"-{axis}"
 
     def _orthographic_view(
         self,
@@ -130,8 +134,9 @@ class OcctProjectionAdapter(ProjectionAdapter):
         )
 
         using_source_edges = bool(model.primary_shape.source_edges)
+        source_centerlines: list[ProjectedEdge] = []
         if using_source_edges:
-            bounds, visible_edges, hidden_edges = self._source_edges_for_orthographic_view(model, axes, mode)
+            bounds, visible_edges, hidden_edges, source_centerlines = self._source_edges_for_orthographic_view(model, axes, mode)
             width = max(bounds.width, 1.0)
             height = max(bounds.height, 1.0)
         else:
@@ -151,7 +156,7 @@ class OcctProjectionAdapter(ProjectionAdapter):
         smooth_edges: list[ProjectedEdge] = []
         circles: list[ProjectedCircle] = []
         arcs: list[ProjectedArc] = []
-        centerlines: list[ProjectedEdge] = []
+        centerlines: list[ProjectedEdge] = source_centerlines[:]
 
         show_hidden = select_hidden_line_policy(model, kind, default=mode == "final")
         if show_hidden and not using_source_edges:
@@ -302,7 +307,7 @@ class OcctProjectionAdapter(ProjectionAdapter):
 
     def _source_edges_for_orthographic_view(
         self, model: CanonicalCadModel, axes: "_OrthographicAxes", mode: str
-    ) -> tuple[Bounds2D, list[ProjectedEdge], list[ProjectedEdge]]:
+    ) -> tuple[Bounds2D, list[ProjectedEdge], list[ProjectedEdge], list[ProjectedEdge]]:
         bbox = model.primary_shape.bounding_box
         kind = axes.kind
         view_source = self._view_ref(model, kind)
@@ -325,7 +330,7 @@ class OcctProjectionAdapter(ProjectionAdapter):
             all_points.extend([start_2d, end_2d])
 
         if not all_points:
-            return Bounds2D.from_extents(0.0, 0.0, 1.0, 1.0), [], []
+            return Bounds2D.from_extents(0.0, 0.0, 1.0, 1.0), [], [], []
 
         raw_bounds = Bounds2D.from_points(all_points)
         visible_by_key: dict[tuple[tuple[float, float], tuple[float, float]], ProjectedEdge] = {}
@@ -369,6 +374,13 @@ class OcctProjectionAdapter(ProjectionAdapter):
             key = self._segment_key(normalized_start, normalized_end)
             if key in visible_by_key:
                 continue
+            if outline_only_visible and not self._segment_on_projected_outline(
+                normalized_start,
+                normalized_end,
+                raw_bounds.width,
+                raw_bounds.height,
+            ):
+                continue
             visible_by_key[key] = self._edge(
                 f"{kind}-{segment_id}",
                 [normalized_start, normalized_end],
@@ -381,8 +393,14 @@ class OcctProjectionAdapter(ProjectionAdapter):
                 "visible",
             )
 
+        synthetic_hidden, synthetic_centerlines = self._plate_hole_projection_items(model, axes, raw_bounds)
+        for edge in synthetic_hidden:
+            key = self._segment_key(edge.points[0], edge.points[-1])
+            if key not in visible_by_key:
+                hidden_by_key[key] = edge
+
         bounds = Bounds2D.from_extents(0.0, 0.0, max(raw_bounds.width, 1.0), max(raw_bounds.height, 1.0))
-        return bounds, list(visible_by_key.values()), list(hidden_by_key.values())
+        return bounds, list(visible_by_key.values()), list(hidden_by_key.values()), synthetic_centerlines
 
     def _source_edges_for_isometric_view(self, model: CanonicalCadModel) -> ProjectedViewGeometry:
         bbox = model.primary_shape.bounding_box
@@ -506,11 +524,13 @@ class OcctProjectionAdapter(ProjectionAdapter):
         return bbox.min.z, bbox.max.z
 
     def _axis_value(self, point: Point3D, axis: str) -> float:
-        if axis == "x":
-            return point.x
-        if axis == "y":
-            return point.y
-        return point.z
+        sign = -1.0 if axis.startswith("-") else 1.0
+        clean = axis.lstrip("-")
+        if clean == "x":
+            return sign * point.x
+        if clean == "y":
+            return sign * point.y
+        return sign * point.z
 
     def _edge_is_visible(self, start_depth: float, end_depth: float, near_depth: float, far_depth: float) -> bool:
         eps = max(abs(far_depth - near_depth), 1.0) * 1e-5
@@ -660,6 +680,315 @@ class OcctProjectionAdapter(ProjectionAdapter):
             segments.append((str(record["id"]), start_2d, end_2d))
 
         return segments
+
+    def _plate_hole_projection_items(
+        self,
+        model: CanonicalCadModel,
+        axes: "_OrthographicAxes",
+        raw_bounds: Bounds2D,
+    ) -> tuple[list[ProjectedEdge], list[ProjectedEdge]]:
+        profiles = self._plate_hole_profiles(model)
+        if not profiles:
+            return [], []
+
+        hidden_edges: list[ProjectedEdge] = []
+        centerlines: list[ProjectedEdge] = []
+        view_source = self._view_ref(model, axes.kind)
+        width_axis = self._clean_axis(axes.width_axis)
+        height_axis = self._clean_axis(axes.height_axis)
+
+        for index, profile in enumerate(profiles, start=1):
+            hole_axis = self._clean_axis(profile.hole_axis)
+            profile_width_axis = self._clean_axis(profile.width_axis)
+            profile_height_axis = self._clean_axis(profile.height_axis)
+
+            if self._clean_axis(axes.depth_axis) == hole_axis and {width_axis, height_axis} == {
+                profile_width_axis,
+                profile_height_axis,
+            }:
+                center = Point2D(
+                    x=self._hole_profile_coordinate(profile, axes.width_axis) - raw_bounds.x_min,
+                    y=self._hole_profile_coordinate(profile, axes.height_axis) - raw_bounds.y_min,
+                )
+                radius = min(
+                    self._hole_profile_radius(profile, axes.width_axis),
+                    self._hole_profile_radius(profile, axes.height_axis),
+                )
+                mark = max(radius * 1.45, 3.0)
+                centerlines.extend(
+                    [
+                        self._edge(
+                            f"{axes.kind}-hole-{index}-center-h",
+                            [(center.x - mark, center.y), (center.x + mark, center.y)],
+                            view_source,
+                            "centerline",
+                        ),
+                        self._edge(
+                            f"{axes.kind}-hole-{index}-center-v",
+                            [(center.x, center.y - mark), (center.x, center.y + mark)],
+                            view_source,
+                            "centerline",
+                        ),
+                    ]
+                )
+                continue
+
+            if width_axis == hole_axis and height_axis in {profile_width_axis, profile_height_axis}:
+                center = self._hole_profile_coordinate(profile, axes.height_axis) - raw_bounds.y_min
+                radius = self._hole_profile_radius(profile, axes.height_axis)
+                for side, tangent in (("near", center - radius), ("far", center + radius)):
+                    if 0.0 <= tangent <= raw_bounds.height:
+                        hidden_edges.append(
+                            self._edge(
+                                f"{axes.kind}-hole-{index}-hidden-{side}",
+                                [(0.0, tangent), (raw_bounds.width, tangent)],
+                                view_source,
+                                "hidden",
+                            )
+                        )
+                continue
+
+            if height_axis == hole_axis and width_axis in {profile_width_axis, profile_height_axis}:
+                center = self._hole_profile_coordinate(profile, axes.width_axis) - raw_bounds.x_min
+                radius = self._hole_profile_radius(profile, axes.width_axis)
+                for side, tangent in (("near", center - radius), ("far", center + radius)):
+                    if 0.0 <= tangent <= raw_bounds.width:
+                        hidden_edges.append(
+                            self._edge(
+                                f"{axes.kind}-hole-{index}-hidden-{side}",
+                                [(tangent, 0.0), (tangent, raw_bounds.height)],
+                                view_source,
+                                "hidden",
+                            )
+                        )
+
+        return hidden_edges, centerlines
+
+    def _plate_hole_profiles(self, model: CanonicalCadModel) -> list["_HoleProfile"]:
+        if not is_plate_like(model) or not model.primary_shape.source_edges:
+            return []
+
+        top_axes = self._orthographic_axes_for_model(model)["top"]
+
+        def project(point: Point3D) -> Point2D:
+            return Point2D(
+                x=self._axis_value(point, top_axes.width_axis),
+                y=self._axis_value(point, top_axes.height_axis),
+            )
+
+        projected_edges: list[tuple[Point2D, Point2D]] = []
+        all_points: list[Point2D] = []
+        for edge in model.primary_shape.source_edges:
+            start = project(edge.start)
+            end = project(edge.end)
+            if self._same_2d_point(start, end):
+                continue
+            projected_edges.append((start, end))
+            all_points.extend([start, end])
+
+        if not all_points:
+            return []
+
+        raw_bounds = Bounds2D.from_points(all_points)
+        adjacency: dict[tuple[float, float], set[tuple[float, float]]] = {}
+        points_by_key: dict[tuple[float, float], Point2D] = {}
+
+        for start, end in projected_edges:
+            normalized_start = Point2D(x=start.x - raw_bounds.x_min, y=start.y - raw_bounds.y_min)
+            normalized_end = Point2D(x=end.x - raw_bounds.x_min, y=end.y - raw_bounds.y_min)
+            if self._segment_on_projected_outline(normalized_start, normalized_end, raw_bounds.width, raw_bounds.height):
+                continue
+            start_key = self._point_key_2d(start)
+            end_key = self._point_key_2d(end)
+            points_by_key[start_key] = start
+            points_by_key[end_key] = end
+            adjacency.setdefault(start_key, set()).add(end_key)
+            adjacency.setdefault(end_key, set()).add(start_key)
+
+        profiles: list[_HoleProfile] = []
+        visited: set[tuple[float, float]] = set()
+        boundary_margin = max(raw_bounds.width, raw_bounds.height, 1.0) * 0.005
+
+        for start_key in adjacency:
+            if start_key in visited:
+                continue
+            stack = [start_key]
+            component_keys: set[tuple[float, float]] = set()
+            while stack:
+                key = stack.pop()
+                if key in visited:
+                    continue
+                visited.add(key)
+                component_keys.add(key)
+                stack.extend(adjacency.get(key, set()) - visited)
+
+            component_points = [points_by_key[key] for key in component_keys if key in points_by_key]
+            if len(component_points) < 8:
+                continue
+            component_bounds = Bounds2D.from_points(component_points)
+            if component_bounds.width < 1.0 or component_bounds.height < 1.0:
+                continue
+            if (
+                component_bounds.x_min <= raw_bounds.x_min + boundary_margin
+                or component_bounds.x_max >= raw_bounds.x_max - boundary_margin
+                or component_bounds.y_min <= raw_bounds.y_min + boundary_margin
+                or component_bounds.y_max >= raw_bounds.y_max - boundary_margin
+            ):
+                continue
+            aspect = max(component_bounds.width, component_bounds.height) / max(
+                min(component_bounds.width, component_bounds.height),
+                1e-6,
+            )
+            if aspect > 1.8:
+                continue
+
+            profiles.append(
+                _HoleProfile(
+                    id=f"hole-{len(profiles) + 1}",
+                    width_axis=top_axes.width_axis,
+                    height_axis=top_axes.height_axis,
+                    hole_axis=top_axes.depth_axis,
+                    center_width=(component_bounds.x_min + component_bounds.x_max) / 2.0,
+                    center_height=(component_bounds.y_min + component_bounds.y_max) / 2.0,
+                    radius_width=component_bounds.width / 2.0,
+                    radius_height=component_bounds.height / 2.0,
+                )
+            )
+
+        for profile in self._plate_hole_profiles_from_through_edges(model, top_axes, raw_bounds):
+            if any(
+                abs(existing.center_width - profile.center_width) <= max(existing.radius_width, profile.radius_width, 1.0)
+                and abs(existing.center_height - profile.center_height) <= max(existing.radius_height, profile.radius_height, 1.0)
+                for existing in profiles
+            ):
+                continue
+            profiles.append(profile)
+
+        return profiles
+
+    def _plate_hole_profiles_from_through_edges(
+        self,
+        model: CanonicalCadModel,
+        top_axes: "_OrthographicAxes",
+        raw_bounds: Bounds2D,
+    ) -> list["_HoleProfile"]:
+        thickness = self._axis_size(model.primary_shape.bounding_box.size, top_axes.depth_axis)
+        if thickness <= 0:
+            return []
+
+        boundary_margin = max(raw_bounds.width, raw_bounds.height, 1.0) * 0.005
+        through_points: list[Point2D] = []
+
+        for edge in model.primary_shape.source_edges:
+            start = Point2D(
+                x=self._axis_value(edge.start, top_axes.width_axis),
+                y=self._axis_value(edge.start, top_axes.height_axis),
+            )
+            end = Point2D(
+                x=self._axis_value(edge.end, top_axes.width_axis),
+                y=self._axis_value(edge.end, top_axes.height_axis),
+            )
+            depth_delta = abs(self._axis_value(edge.start, top_axes.depth_axis) - self._axis_value(edge.end, top_axes.depth_axis))
+            if depth_delta < thickness * 0.5 or not self._same_2d_point(start, end):
+                continue
+            if (
+                start.x <= raw_bounds.x_min + boundary_margin
+                or start.x >= raw_bounds.x_max - boundary_margin
+                or start.y <= raw_bounds.y_min + boundary_margin
+                or start.y >= raw_bounds.y_max - boundary_margin
+            ):
+                continue
+            through_points.append(start)
+
+        profiles: list[_HoleProfile] = []
+        max_radius = min(top_axes.width, top_axes.height) * 0.2
+        profiles.extend(self._hole_profiles_from_aligned_points(through_points, top_axes, align_axis="width", max_radius=max_radius))
+        profiles.extend(self._hole_profiles_from_aligned_points(through_points, top_axes, align_axis="height", max_radius=max_radius))
+        return profiles
+
+    def _hole_profiles_from_aligned_points(
+        self,
+        points: list[Point2D],
+        top_axes: "_OrthographicAxes",
+        *,
+        align_axis: str,
+        max_radius: float,
+    ) -> list["_HoleProfile"]:
+        groups: dict[float, list[Point2D]] = {}
+        for point in points:
+            key = round(point.x if align_axis == "width" else point.y, 2)
+            groups.setdefault(key, []).append(point)
+
+        profiles: list[_HoleProfile] = []
+        for aligned_value, grouped_points in groups.items():
+            values = sorted({round(point.y if align_axis == "width" else point.x, 6) for point in grouped_points})
+            if len(values) < 2:
+                continue
+            clusters: list[list[float]] = []
+            current = [values[0]]
+            split_gap = max(max_radius * 2.5, 8.0)
+            for value in values[1:]:
+                if value - current[-1] > split_gap:
+                    clusters.append(current)
+                    current = [value]
+                else:
+                    current.append(value)
+            clusters.append(current)
+
+            for cluster in clusters:
+                if len(cluster) < 2:
+                    continue
+                low = cluster[0]
+                high = cluster[-1]
+                radius = (high - low) / 2.0
+                if radius < 1.0 or radius > max_radius:
+                    continue
+                if align_axis == "width":
+                    center_width = aligned_value
+                    center_height = (low + high) / 2.0
+                else:
+                    center_width = (low + high) / 2.0
+                    center_height = aligned_value
+
+                profiles.append(
+                    _HoleProfile(
+                        id=f"through-hole-{len(profiles) + 1}",
+                        width_axis=top_axes.width_axis,
+                        height_axis=top_axes.height_axis,
+                        hole_axis=top_axes.depth_axis,
+                        center_width=center_width,
+                        center_height=center_height,
+                        radius_width=radius,
+                        radius_height=radius,
+                    )
+                )
+
+        return profiles
+
+    def _hole_profile_coordinate(self, profile: "_HoleProfile", axis: str) -> float:
+        clean = self._clean_axis(axis)
+        if clean == self._clean_axis(profile.width_axis):
+            return profile.center_width * self._relative_axis_sign(profile.width_axis, axis)
+        if clean == self._clean_axis(profile.height_axis):
+            return profile.center_height * self._relative_axis_sign(profile.height_axis, axis)
+        return 0.0
+
+    def _hole_profile_radius(self, profile: "_HoleProfile", axis: str) -> float:
+        clean = self._clean_axis(axis)
+        if clean == self._clean_axis(profile.width_axis):
+            return profile.radius_width
+        if clean == self._clean_axis(profile.height_axis):
+            return profile.radius_height
+        return 0.0
+
+    def _clean_axis(self, axis: str) -> str:
+        return axis.lstrip("-")
+
+    def _axis_sign(self, axis: str) -> float:
+        return -1.0 if axis.startswith("-") else 1.0
+
+    def _relative_axis_sign(self, source_axis: str, target_axis: str) -> float:
+        return self._axis_sign(target_axis) / self._axis_sign(source_axis)
 
     def _isometric_silhouette_segments(
         self,
@@ -932,6 +1261,18 @@ class OcctProjectionAdapter(ProjectionAdapter):
             source_ref=source_ref,
             style_role=style_role,  # type: ignore[arg-type]
         )
+
+
+@dataclass(frozen=True)
+class _HoleProfile:
+    id: str
+    width_axis: str
+    height_axis: str
+    hole_axis: str
+    center_width: float
+    center_height: float
+    radius_width: float
+    radius_height: float
 
 
 @dataclass(frozen=True)

@@ -8,6 +8,7 @@ const appUrl = process.env.APP_URL ?? "http://127.0.0.1:5173";
 const outputDir = path.resolve(process.cwd(), ".generated");
 const screenshotPath = path.join(outputDir, "smoke-view-layout.png");
 const executablePath = findBrowserExecutable();
+const toleranceMm = 0.05;
 
 await fs.mkdir(outputDir, { recursive: true });
 
@@ -21,34 +22,44 @@ try {
   const page = await browser.newPage();
   await page.goto(appUrl, { waitUntil: "networkidle2" });
   await waitForIdle(page);
+
+  let previewId = await readPreviewId(page);
   await uploadFixture(page, path.resolve(process.cwd(), "public", "fixtures", "cube-30.step"));
   await waitForIdle(page);
+  await waitForPreviewIdChange(page, previewId);
   await waitForCanvasSelector(page, "[data-hitbox-for='view-front']", 45000);
 
-  await clickHitbox(page, "view-front");
-  await waitForSelectedView(page, "view-front");
-
-  const initialFront = await readViewMetrics(page);
+  const cubeInitial = await readViewPositions(page);
   await dragHitbox(page, "view-front", 120, 60);
   await waitForIdle(page);
-  const movedFront = await waitForMetricChange(page, initialFront, "x");
+  const cubeMoved = await waitForViewPositionChange(page, cubeInitial, "view-front", "x");
 
-  await clickButtonByAriaLabel(page, "Select top view");
-  await waitForSelectedView(page, "view-top");
-  const initialTop = await readViewMetrics(page);
-  await dragHitbox(page, "view-top", -80, 45);
+  assertMoved(cubeInitial, cubeMoved, "view-front", "x");
+  assertMoved(cubeInitial, cubeMoved, "view-front", "y");
+  assertMoved(cubeInitial, cubeMoved, "view-right", "x");
+  assertMoved(cubeInitial, cubeMoved, "view-right", "y");
+  assertMoved(cubeInitial, cubeMoved, "view-top", "x");
+  assertMoved(cubeInitial, cubeMoved, "view-top", "y");
+
+  const rightInitial = cubeMoved;
+  await dragHitbox(page, "view-right", 90, 65);
   await waitForIdle(page);
-  const movedTop = await waitForMetricChange(page, initialTop, "x");
+  const rightMoved = await waitForViewPositionChange(page, rightInitial, "view-right", "x");
+  assertMoved(rightInitial, rightMoved, "view-right", "x");
+  assertUnchanged(rightInitial, rightMoved, "view-right", "y");
 
-  if (movedFront.x <= initialFront.x || movedFront.y <= initialFront.y) {
-    throw new Error(`Front view did not move as expected: ${JSON.stringify({ initialFront, movedFront })}`);
-  }
-  if (Math.abs(initialFront.scale - 1.0) > 0.05 || Math.abs(movedFront.scale - 1.0) > 0.05) {
-    throw new Error(`Front view did not stay at 1:1 scale as expected: ${JSON.stringify({ initialFront, movedFront })}`);
-  }
-  if (movedTop.x >= initialTop.x || movedTop.y <= initialTop.y) {
-    throw new Error(`Top view did not move independently as expected: ${JSON.stringify({ initialTop, movedTop })}`);
-  }
+  previewId = await readPreviewId(page);
+  await uploadFixture(page, path.resolve(process.cwd(), "public", "fixtures", "hole-pattern.step"));
+  await waitForIdle(page);
+  await waitForPreviewIdChange(page, previewId);
+  await waitForCanvasSelector(page, "[data-hitbox-for='view-front']", 45000);
+
+  const plateInitial = await readViewPositions(page);
+  await dragHitbox(page, "view-front", 80, 70);
+  await waitForIdle(page);
+  const frontMoved = await waitForViewPositionChange(page, plateInitial, "view-front", "y");
+  assertUnchanged(plateInitial, frontMoved, "view-front", "x");
+  assertMoved(plateInitial, frontMoved, "view-front", "y");
 
   await page.screenshot({ path: screenshotPath, fullPage: true });
   console.log(
@@ -56,10 +67,11 @@ try {
       {
         appUrl,
         screenshotPath,
-        initialFront,
-        movedFront,
-        initialTop,
-        movedTop,
+        cubeInitial,
+        cubeMoved,
+        rightMoved,
+        plateInitial,
+        frontMoved,
       },
       null,
       2,
@@ -81,26 +93,6 @@ async function uploadFixture(page, fixturePath) {
   await input.uploadFile(fixturePath);
 }
 
-async function clickButtonByAriaLabel(page, ariaLabel) {
-  const clicked = await page.evaluate((targetLabel) => {
-    const button = Array.from(document.querySelectorAll("button")).find(
-      (candidate) => candidate.getAttribute("aria-label") === targetLabel,
-    );
-    if (!button) return false;
-    button.click();
-    return true;
-  }, ariaLabel);
-  if (!clicked) {
-    throw new Error(`Unable to find button with aria-label "${ariaLabel}"`);
-  }
-}
-
-async function clickHitbox(page, targetId) {
-  const point = await getInsetPoint(page, `[data-hitbox-for='${targetId}']`);
-  await page.mouse.move(point.x, point.y);
-  await page.mouse.click(point.x, point.y);
-}
-
 async function dragHitbox(page, targetId, deltaX, deltaY) {
   const point = await getInsetPoint(page, `[data-hitbox-for='${targetId}']`);
   await page.mouse.move(point.x, point.y);
@@ -117,66 +109,61 @@ async function waitForCanvasSelector(page, selector, timeout = 15000) {
   );
 }
 
-async function waitForSelectedView(page, targetId) {
+async function waitForPreviewIdChange(page, previousPreviewId) {
   await page.waitForFunction(
-    (expectedId) => document.querySelector("[data-selected-view-id]")?.getAttribute("data-selected-view-id") === expectedId,
-    { timeout: 15000 },
-    targetId,
+    (previous) => {
+      const current = document.querySelector("[data-preview-id]")?.getAttribute("data-preview-id") ?? "";
+      return current.length > 0 && current !== previous;
+    },
+    { timeout: 45000 },
+    previousPreviewId ?? "",
   );
 }
 
-async function waitForMetricChange(page, baseline, metric) {
+async function waitForViewPositionChange(page, baseline, viewId, axis) {
   await page.waitForFunction(
-    ([previous, targetMetric]) => {
-      const selected = document.querySelector("[data-selected-view-id]");
-      if (!selected) return false;
-      const metrics = Array.from(document.querySelectorAll("[data-view-metric]")).reduce((accumulator, node) => {
-        const key = node.getAttribute("data-view-metric");
-        const value = parseFloat(node.textContent?.replace(/[^0-9.-]+/g, " ")?.trim().split(/\s+/)[0] ?? "");
-        if (key) {
-          accumulator[key] = value;
-        }
-        return accumulator;
-      }, {});
-      return Math.abs((metrics[targetMetric] ?? 0) - previous[targetMetric]) > 0.05;
+    ([previous, targetViewId, targetAxis, tolerance]) => {
+      const positions = Object.fromEntries(
+        Array.from(document.querySelectorAll("[data-hitbox-for]")).map((node) => [
+          node.getAttribute("data-hitbox-for"),
+          {
+            kind: node.getAttribute("data-view-kind"),
+            x: Number.parseFloat(node.getAttribute("data-view-x-mm") ?? "NaN"),
+            y: Number.parseFloat(node.getAttribute("data-view-y-mm") ?? "NaN"),
+          },
+        ]),
+      );
+      return Math.abs((positions[targetViewId]?.[targetAxis] ?? 0) - previous[targetViewId][targetAxis]) > tolerance;
     },
     { timeout: 15000 },
-    [baseline, metric],
+    [baseline, viewId, axis, toleranceMm],
   );
-  return readViewMetrics(page);
+  return readViewPositions(page);
 }
 
-async function readViewMetrics(page) {
-  return page.evaluate(() => {
-    const metrics = Array.from(document.querySelectorAll("[data-view-metric]")).reduce((accumulator, node) => {
-      const key = node.getAttribute("data-view-metric");
-      const value = parseFloat(node.textContent?.replace(/[^0-9.-]+/g, " ")?.trim().split(/\s+/)[0] ?? "");
-      if (key) {
-        accumulator[key] = value;
-      }
-      return accumulator;
-    }, {});
-    return {
-      x: metrics.x ?? NaN,
-      y: metrics.y ?? NaN,
-      scale: metrics.scale ?? NaN,
-    };
-  });
+async function readViewPositions(page) {
+  return page.evaluate(() =>
+    Object.fromEntries(
+      Array.from(document.querySelectorAll("[data-hitbox-for]")).map((node) => [
+        node.getAttribute("data-hitbox-for"),
+        {
+          kind: node.getAttribute("data-view-kind"),
+          x: Number.parseFloat(node.getAttribute("data-view-x-mm") ?? "NaN"),
+          y: Number.parseFloat(node.getAttribute("data-view-y-mm") ?? "NaN"),
+        },
+      ]),
+    ),
+  );
 }
 
-async function getCenter(page, selector) {
-  const box = await page.$eval(selector, (node) => {
-    const rect = node.getBoundingClientRect();
-    return {
-      x: rect.left + rect.width / 2,
-      y: rect.top + rect.height / 2,
-    };
-  });
-  return box;
+async function readPreviewId(page) {
+  return page
+    .$eval("[data-preview-id]", (node) => node.getAttribute("data-preview-id") ?? "")
+    .catch(() => "");
 }
 
 async function getInsetPoint(page, selector, inset = 16) {
-  const box = await page.$eval(selector, (node, targetInset) => {
+  return page.$eval(selector, (node, targetInset) => {
     const rect = node.getBoundingClientRect();
     const insetPx = Math.min(targetInset, rect.width / 3, rect.height / 3);
     return {
@@ -184,7 +171,20 @@ async function getInsetPoint(page, selector, inset = 16) {
       y: rect.top + insetPx,
     };
   }, inset);
-  return box;
+}
+
+function assertMoved(before, after, viewId, axis) {
+  const delta = Math.abs(after[viewId][axis] - before[viewId][axis]);
+  if (delta <= toleranceMm) {
+    throw new Error(`${viewId} ${axis} did not move: ${JSON.stringify({ before: before[viewId], after: after[viewId] })}`);
+  }
+}
+
+function assertUnchanged(before, after, viewId, axis) {
+  const delta = Math.abs(after[viewId][axis] - before[viewId][axis]);
+  if (delta > toleranceMm) {
+    throw new Error(`${viewId} ${axis} changed unexpectedly: ${JSON.stringify({ before: before[viewId], after: after[viewId] })}`);
+  }
 }
 
 function findBrowserExecutable() {

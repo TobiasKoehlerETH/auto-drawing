@@ -2,7 +2,8 @@ import unittest
 
 from autodrawing.importers import StepImportService
 from autodrawing.projection import ProjectionService
-from autodrawing.view_planner import plan_view_pack, select_hidden_line_policy
+from autodrawing.standards import DEFAULT_VIEW_GAP_MM, TITLE_BLOCK_BOUNDS_MM
+from autodrawing.view_planner import placed_bounds, plan_view_pack, select_hidden_line_policy
 
 
 class ViewPlannerTests(unittest.TestCase):
@@ -24,6 +25,17 @@ class ViewPlannerTests(unittest.TestCase):
         self.assertEqual(placements["front"].scale, placements["top"].scale)
         self.assertEqual(placements["right"].scale, placements["top"].scale)
         self.assertEqual(placements["isometric"].scale, 0.5)
+
+    def test_isometric_defaults_above_title_block(self):
+        model = StepImportService().import_file("fixtures/step/cube-30.step")
+        projection = ProjectionService().build_projection(model, mode="final")
+
+        placements = plan_view_pack(projection, model, "first-angle")
+        isometric_geometry = next(view for view in projection.views if view.kind == "isometric")
+        bounds = placed_bounds(isometric_geometry.bounds, placements["isometric"])
+
+        self.assertLessEqual(bounds.y_max, TITLE_BLOCK_BOUNDS_MM["y"] - DEFAULT_VIEW_GAP_MM / 2.0 + 1e-6)
+        self.assertAlmostEqual(bounds.x_max, TITLE_BLOCK_BOUNDS_MM["x"] + TITLE_BLOCK_BOUNDS_MM["width"])
 
     def test_plate_layout_places_front_below_top(self):
         model = StepImportService().import_file("fixtures/step/hole-pattern.step")

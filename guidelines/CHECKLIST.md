@@ -133,6 +133,6 @@ Every item is a binary PASS / FAIL with visible evidence.
 
 - [ ] P.1 Dimension text is not duplicated by dual-unit or stacked display formatting.
 - [ ] P.2 The exported sheet was regenerated from the current automation pass, not reused from a stale drawing file.
-- [ ] P.3 If DimXpert was attempted, it is only treated as valid when it produced real usable annotations; otherwise the drawing relies on the verified drawing-side native path.
+- [ ] P.3 Optional exact-geometry extraction is only treated as valid when it produced real usable annotations; otherwise the drawing relies on the deterministic preview path.
 - [ ] P.4 Visible parenthesized dimension text has been removed after the final cleanup pass.
 - [ ] P.5 A duplicate-dimension dedupe pass ran before completion, and any remaining ambiguous duplicates were flagged for review.
