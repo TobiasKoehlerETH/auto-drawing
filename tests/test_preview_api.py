@@ -103,7 +103,8 @@ class PreviewApiTests(unittest.TestCase):
         self.assertEqual(payload["document"]["canonical_model_name"], "cube-from-occt.step")
         self.assertTrue(any(item["id"].startswith("front-mesh-") for item in payload["projection"]["views"][0]["visible_edges"]))
         isometric = next(view for view in payload["projection"]["views"] if view["kind"] == "isometric")
-        self.assertEqual(len(isometric["visible_edges"]), 9)
+        self.assertEqual(len(isometric["visible_edges"]), 6)
+        self.assertTrue(any(len(edge["points"]) > 2 for edge in isometric["visible_edges"]))
         self.assertFalse(isometric["hidden_edges"])
         self.assertFalse(payload["document"]["dimensions"])
 
