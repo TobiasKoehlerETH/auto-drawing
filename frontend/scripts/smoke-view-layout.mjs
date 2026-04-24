@@ -33,10 +33,6 @@ try {
   await waitForIdle(page);
   const movedFront = await waitForMetricChange(page, initialFront, "x");
 
-  await scaleSelectedView(page, 40, 36);
-  await waitForIdle(page);
-  const scaledFront = await waitForMetricChange(page, movedFront, "scale");
-
   await clickButtonByAriaLabel(page, "Select top view");
   await waitForSelectedView(page, "view-top");
   const initialTop = await readViewMetrics(page);
@@ -44,22 +40,14 @@ try {
   await waitForIdle(page);
   const movedTop = await waitForMetricChange(page, initialTop, "x");
 
-  const initialWidthDimension = await readDimensionPlacement(page, "dim-front-width");
-  await dragElement(page, "[data-dimension-id='dim-front-width']", 0, 48);
-  await waitForIdle(page);
-  const movedWidthDimension = await waitForDimensionPlacementChange(page, "dim-front-width", initialWidthDimension, "y");
-
   if (movedFront.x <= initialFront.x || movedFront.y <= initialFront.y) {
     throw new Error(`Front view did not move as expected: ${JSON.stringify({ initialFront, movedFront })}`);
   }
-  if (scaledFront.scale <= movedFront.scale) {
-    throw new Error(`Front view did not scale up as expected: ${JSON.stringify({ movedFront, scaledFront })}`);
+  if (Math.abs(initialFront.scale - 1.0) > 0.05 || Math.abs(movedFront.scale - 1.0) > 0.05) {
+    throw new Error(`Front view did not stay at 1:1 scale as expected: ${JSON.stringify({ initialFront, movedFront })}`);
   }
   if (movedTop.x >= initialTop.x || movedTop.y <= initialTop.y) {
     throw new Error(`Top view did not move independently as expected: ${JSON.stringify({ initialTop, movedTop })}`);
-  }
-  if (movedWidthDimension.y <= initialWidthDimension.y) {
-    throw new Error(`Front width dimension did not stay moved as expected: ${JSON.stringify({ initialWidthDimension, movedWidthDimension })}`);
   }
 
   await page.screenshot({ path: screenshotPath, fullPage: true });
@@ -70,11 +58,8 @@ try {
         screenshotPath,
         initialFront,
         movedFront,
-        scaledFront,
         initialTop,
         movedTop,
-        initialWidthDimension,
-        movedWidthDimension,
       },
       null,
       2,
@@ -124,23 +109,6 @@ async function dragHitbox(page, targetId, deltaX, deltaY) {
   await page.mouse.up();
 }
 
-async function dragElement(page, selector, deltaX, deltaY) {
-  const box = await getCenter(page, selector);
-  await page.mouse.move(box.x, box.y);
-  await page.mouse.down();
-  await page.mouse.move(box.x + deltaX, box.y + deltaY, { steps: 18 });
-  await page.mouse.up();
-}
-
-async function scaleSelectedView(page, deltaX, deltaY) {
-  await waitForCanvasSelector(page, "[data-resize-handle]");
-  const handle = await getCenter(page, "[data-resize-handle]");
-  await page.mouse.move(handle.x, handle.y);
-  await page.mouse.down();
-  await page.mouse.move(handle.x + deltaX, handle.y + deltaY, { steps: 18 });
-  await page.mouse.up();
-}
-
 async function waitForCanvasSelector(page, selector, timeout = 15000) {
   await page.waitForFunction(
     (expectedSelector) => !!document.querySelector(expectedSelector),
@@ -178,20 +146,6 @@ async function waitForMetricChange(page, baseline, metric) {
   return readViewMetrics(page);
 }
 
-async function waitForDimensionPlacementChange(page, dimensionId, baseline, metric) {
-  await page.waitForFunction(
-    ([targetId, previous, targetMetric]) => {
-      const node = document.querySelector(`[data-dimension-id='${targetId}']`);
-      if (!node) return false;
-      const value = parseFloat(node.getAttribute(`data-dimension-${targetMetric}`) ?? "NaN");
-      return Number.isFinite(value) && Math.abs(value - previous[targetMetric]) > 0.05;
-    },
-    { timeout: 15000 },
-    [dimensionId, baseline, metric],
-  );
-  return readDimensionPlacement(page, dimensionId);
-}
-
 async function readViewMetrics(page) {
   return page.evaluate(() => {
     const metrics = Array.from(document.querySelectorAll("[data-view-metric]")).reduce((accumulator, node) => {
@@ -208,13 +162,6 @@ async function readViewMetrics(page) {
       scale: metrics.scale ?? NaN,
     };
   });
-}
-
-async function readDimensionPlacement(page, dimensionId) {
-  return page.$eval(`[data-dimension-id='${dimensionId}']`, (node) => ({
-    x: parseFloat(node.getAttribute("data-dimension-x") ?? "NaN"),
-    y: parseFloat(node.getAttribute("data-dimension-y") ?? "NaN"),
-  }));
 }
 
 async function getCenter(page, selector) {

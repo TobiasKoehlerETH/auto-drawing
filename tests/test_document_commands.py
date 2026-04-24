@@ -87,6 +87,61 @@ class DocumentCommandTests(unittest.TestCase):
         redone = pipeline.redo(undone)
         self.assertEqual(redone.document.display_transforms[target_id], "translate(12 8) scale(1.25 1.25)")
 
+    def test_set_title_block_field_updates_exact_template_and_undo_redo(self):
+        pipeline = AutodrawingPipeline()
+        bundle = pipeline.from_step_file("fixtures/step/cube-30.step", mode="final")
+        title_field = next(field for field in bundle.document.title_block_fields if field.id == "tb-title")
+        updated_title = "Edited Cube Title"
+        command = DrawingCommand(
+            id="cmd-title",
+            kind="SetTitleBlockField",
+            target_id=title_field.id,
+            before={"value": title_field.value},
+            after={"value": updated_title},
+        )
+
+        updated = pipeline.apply_command(bundle, command)
+        updated_field = next(field for field in updated.document.title_block_fields if field.id == title_field.id)
+        self.assertEqual(updated_field.value, updated_title)
+        self.assertIn(updated_title, updated.document.page_template.svg_source)
+
+        undone = pipeline.undo(updated)
+        undone_field = next(field for field in undone.document.title_block_fields if field.id == title_field.id)
+        self.assertEqual(undone_field.value, title_field.value)
+        self.assertIn(title_field.value, undone.document.page_template.svg_source)
+
+        redone = pipeline.redo(undone)
+        redone_field = next(field for field in redone.document.title_block_fields if field.id == title_field.id)
+        self.assertEqual(redone_field.value, updated_title)
+        self.assertIn(updated_title, redone.document.page_template.svg_source)
+
+    def test_apply_commands_can_scale_all_non_isometric_views_together(self):
+        pipeline = AutodrawingPipeline()
+        bundle = pipeline.from_step_file("fixtures/step/cube-30.step", mode="final")
+        orthographic_views = [view for view in bundle.document.views if view.kind != "isometric"]
+        isometric_view = next(view for view in bundle.document.views if view.kind == "isometric")
+        target_scale = 1.35
+
+        updated = pipeline.apply_commands(
+            bundle,
+            [
+                DrawingCommand(
+                    id=f"cmd-scale-{view.id}",
+                    kind="ChangeViewScale",
+                    target_id=view.id,
+                    before={"scale": view.placement.scale},
+                    after={"scale": target_scale},
+                )
+                for view in orthographic_views
+            ],
+        )
+
+        for view in updated.document.views:
+            if view.kind == "isometric":
+                self.assertEqual(view.placement.scale, isometric_view.placement.scale)
+            else:
+                self.assertEqual(view.placement.scale, target_scale)
+
     def test_move_and_scale_view_rebuilds_scene(self):
         pipeline = AutodrawingPipeline()
         bundle = pipeline.from_step_file("fixtures/step/cube-30.step", mode="final")

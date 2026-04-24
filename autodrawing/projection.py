@@ -16,7 +16,7 @@ from .contracts import (
     ProjectionBundle,
     ProjectionSourceRef,
 )
-from .view_planner import select_centerline_circles, select_hidden_line_policy
+from .view_planner import is_plate_like, select_centerline_circles, select_hidden_line_policy
 
 
 class ProjectionAdapter:
@@ -36,12 +36,11 @@ class OcctProjectionAdapter(ProjectionAdapter):
         bbox = shape.bounding_box.size
         hints = shape.feature_hints
         orthographic_axes = self._orthographic_axes_for_model(model)
-        views = [
-            self._orthographic_view(model, orthographic_axes["front"], hints, mode),
-            self._orthographic_view(model, orthographic_axes["top"], hints, mode),
-            self._orthographic_view(model, orthographic_axes["right"], hints, mode),
-            self._isometric_view(model, bbox.x, bbox.y, bbox.z, mode),
-        ]
+        orthographic_order = ["front", "top", "right"]
+        if is_plate_like(model):
+            orthographic_order = ["top", "front", "right"]
+        views = [self._orthographic_view(model, orthographic_axes[kind], hints, mode) for kind in orthographic_order]
+        views.append(self._isometric_view(model, bbox.x, bbox.y, bbox.z, mode))
         return ProjectionBundle(
             schema_version="1.0",
             model_name=model.source_name,
@@ -57,8 +56,36 @@ class OcctProjectionAdapter(ProjectionAdapter):
             _OrthographicAxes(kind="front", width_axis="x", height_axis="z", depth_axis="y", width=bbox.x, height=bbox.z),
             _OrthographicAxes(kind="front", width_axis="y", height_axis="z", depth_axis="x", width=bbox.y, height=bbox.z),
         ]
-        front = max(candidates, key=lambda candidate: (candidate.width * candidate.height, min(candidate.width, candidate.height)))
+        broad_face = max(candidates, key=lambda candidate: (candidate.width * candidate.height, min(candidate.width, candidate.height)))
 
+        if is_plate_like(model):
+            top = _OrthographicAxes(
+                kind="top",
+                width_axis=broad_face.width_axis,
+                height_axis=broad_face.height_axis,
+                depth_axis=broad_face.depth_axis,
+                width=broad_face.width,
+                height=broad_face.height,
+            )
+            front = _OrthographicAxes(
+                kind="front",
+                width_axis=broad_face.width_axis,
+                height_axis=broad_face.depth_axis,
+                depth_axis=broad_face.height_axis,
+                width=self._axis_size(bbox, broad_face.width_axis),
+                height=self._axis_size(bbox, broad_face.depth_axis),
+            )
+            right = _OrthographicAxes(
+                kind="right",
+                width_axis=broad_face.height_axis,
+                height_axis=broad_face.depth_axis,
+                depth_axis=broad_face.width_axis,
+                width=self._axis_size(bbox, broad_face.height_axis),
+                height=self._axis_size(bbox, broad_face.depth_axis),
+            )
+            return {"front": front, "top": top, "right": right}
+
+        front = broad_face
         if (front.width_axis, front.height_axis, front.depth_axis) == ("x", "y", "z"):
             top = _OrthographicAxes(kind="top", width_axis="x", height_axis="z", depth_axis="y", width=bbox.x, height=bbox.z)
             right = _OrthographicAxes(kind="right", width_axis="y", height_axis="z", depth_axis="x", width=bbox.y, height=bbox.z)
@@ -78,6 +105,9 @@ class OcctProjectionAdapter(ProjectionAdapter):
             height=front.height,
         )
         return {"front": front, "top": top, "right": right}
+
+    def _axis_size(self, bbox: Point3D, axis: str) -> float:
+        return bbox.x if axis == "x" else bbox.y if axis == "y" else bbox.z
 
     def _orthographic_view(
         self,
@@ -290,6 +320,10 @@ class OcctProjectionAdapter(ProjectionAdapter):
             projected_segments.append((edge.id, start_2d, end_2d, start_depth, end_depth, edge.curve_kind))
             all_points.extend([start_2d, end_2d])
 
+        silhouette_segments = self._orthographic_silhouette_segments(model, axes)
+        for _segment_id, start_2d, end_2d in silhouette_segments:
+            all_points.extend([start_2d, end_2d])
+
         if not all_points:
             return Bounds2D.from_extents(0.0, 0.0, 1.0, 1.0), [], []
 
@@ -298,13 +332,23 @@ class OcctProjectionAdapter(ProjectionAdapter):
         hidden_by_key: dict[tuple[tuple[float, float], tuple[float, float]], ProjectedEdge] = {}
         near_depth, far_depth = self._depth_extents(bbox, axes.depth_axis)
         show_hidden = select_hidden_line_policy(model, kind, default=mode == "final")
+        outline_only_visible = is_plate_like(model) and kind in {"front", "right"}
 
         for edge_id, start, end, start_depth, end_depth, curve_kind in projected_segments:
             normalized_start = Point2D(x=start.x - raw_bounds.x_min, y=start.y - raw_bounds.y_min)
             normalized_end = Point2D(x=end.x - raw_bounds.x_min, y=end.y - raw_bounds.y_min)
             key = self._segment_key(normalized_start, normalized_end)
             depth_visible = self._edge_is_visible(start_depth, end_depth, near_depth, far_depth)
-            style = "visible" if depth_visible or not show_hidden else "hidden"
+            outline_visible = self._segment_on_projected_outline(
+                normalized_start,
+                normalized_end,
+                raw_bounds.width,
+                raw_bounds.height,
+            )
+            if outline_only_visible:
+                style = "visible" if outline_visible or not show_hidden else "hidden"
+            else:
+                style = "visible" if depth_visible or outline_visible or not show_hidden else "hidden"
             projected = self._edge(
                 f"{kind}-{edge_id}",
                 [normalized_start, normalized_end],
@@ -316,6 +360,26 @@ class OcctProjectionAdapter(ProjectionAdapter):
                 hidden_by_key.pop(key, None)
             elif key not in visible_by_key:
                 hidden_by_key[key] = projected
+
+        for segment_id, start, end in silhouette_segments:
+            normalized_start = Point2D(x=start.x - raw_bounds.x_min, y=start.y - raw_bounds.y_min)
+            normalized_end = Point2D(x=end.x - raw_bounds.x_min, y=end.y - raw_bounds.y_min)
+            if self._same_2d_point(normalized_start, normalized_end):
+                continue
+            key = self._segment_key(normalized_start, normalized_end)
+            if key in visible_by_key:
+                continue
+            visible_by_key[key] = self._edge(
+                f"{kind}-{segment_id}",
+                [normalized_start, normalized_end],
+                ProjectionSourceRef(
+                    id=f"{model.primary_shape.id}-{segment_id}",
+                    shape_id=model.primary_shape.id,
+                    role=f"{kind}-silhouette",
+                    entity_kind="edge",
+                ),
+                "visible",
+            )
 
         bounds = Bounds2D.from_extents(0.0, 0.0, max(raw_bounds.width, 1.0), max(raw_bounds.height, 1.0))
         return bounds, list(visible_by_key.values()), list(hidden_by_key.values())
@@ -363,6 +427,10 @@ class OcctProjectionAdapter(ProjectionAdapter):
             raw_segments.append((edge.id, start, end, start_depth, end_depth))
             all_points.extend([start, end])
 
+        silhouette_segments = self._isometric_silhouette_segments(model, view_direction, projected_triangles)
+        for _segment_id, start, end in silhouette_segments:
+            all_points.extend([start, end])
+
         if not all_points:
             return ProjectedViewGeometry(
                 id="geometry-isometric",
@@ -392,13 +460,37 @@ class OcctProjectionAdapter(ProjectionAdapter):
                 "visible",
             )
 
+        for edge_id, start, end in silhouette_segments:
+            normalized_start = Point2D(x=start.x - raw_bounds.x_min + margin, y=start.y - raw_bounds.y_min + margin)
+            normalized_end = Point2D(x=end.x - raw_bounds.x_min + margin, y=end.y - raw_bounds.y_min + margin)
+            if self._same_2d_point(normalized_start, normalized_end):
+                continue
+            key = self._segment_key(normalized_start, normalized_end)
+            if key in visible_by_key:
+                continue
+            visible_by_key[key] = self._edge(
+                f"isometric-{edge_id}",
+                [normalized_start, normalized_end],
+                ProjectionSourceRef(
+                    id=f"{model.primary_shape.id}-{edge_id}",
+                    shape_id=model.primary_shape.id,
+                    role="isometric-silhouette",
+                    entity_kind="edge",
+                ),
+                "visible",
+            )
+
+        visible_edges = list(visible_by_key.values())
+        if triangles:
+            visible_edges = self._stitch_projected_edges(visible_edges, id_prefix="isometric-chain")
+
         return ProjectedViewGeometry(
             id="geometry-isometric",
             kind="isometric",
             label="Isometric",
             source_ref=self._view_ref(model, "isometric"),
             bounds=Bounds2D.from_extents(0.0, 0.0, max(raw_bounds.width + margin * 2, 20.0), max(raw_bounds.height + margin * 2, 20.0)),
-            visible_edges=list(visible_by_key.values()),
+            visible_edges=visible_edges,
             hidden_edges=[],
             smooth_edges=[],
             circles=[],
@@ -512,6 +604,134 @@ class OcctProjectionAdapter(ProjectionAdapter):
             return None
         return (nx / length, ny / length, nz / length)
 
+    def _orthographic_silhouette_segments(
+        self,
+        model: CanonicalCadModel,
+        axes: "_OrthographicAxes",
+    ) -> list[tuple[str, Point2D, Point2D]]:
+        triangles = model.primary_shape.source_triangles
+        if not triangles:
+            return []
+
+        view_direction = self._orthographic_view_direction(axes.depth_axis)
+        edge_records: dict[tuple[tuple[float, float, float], tuple[float, float, float]], dict[str, object]] = {}
+
+        for triangle in triangles:
+            normal = self._triangle_normal_3d(triangle.a, triangle.b, triangle.c)
+            if normal is None:
+                continue
+            facing = normal[0] * view_direction[0] + normal[1] * view_direction[1] + normal[2] * view_direction[2] > 1e-6
+            for start, end in ((triangle.a, triangle.b), (triangle.b, triangle.c), (triangle.c, triangle.a)):
+                start_key = self._point_key_3d(start)
+                end_key = self._point_key_3d(end)
+                if start_key == end_key:
+                    continue
+                key = tuple(sorted([start_key, end_key]))  # type: ignore[return-value]
+                record = edge_records.setdefault(
+                    key,
+                    {
+                        "id": f"silhouette-{len(edge_records) + 1}",
+                        "start": start if start_key <= end_key else end,
+                        "end": end if start_key <= end_key else start,
+                        "facing": [],
+                    },
+                )
+                facings = record["facing"]
+                if isinstance(facings, list):
+                    facings.append(facing)
+
+        segments: list[tuple[str, Point2D, Point2D]] = []
+        for record in edge_records.values():
+            facings = record["facing"]
+            if not isinstance(facings, list) or not facings:
+                continue
+            is_boundary = len(facings) == 1 and bool(facings[0])
+            is_silhouette = any(facings) and not all(facings)
+            if not is_boundary and not is_silhouette:
+                continue
+            start = record["start"]
+            end = record["end"]
+            if not isinstance(start, Point3D) or not isinstance(end, Point3D):
+                continue
+            start_2d = Point2D(x=self._axis_value(start, axes.width_axis), y=self._axis_value(start, axes.height_axis))
+            end_2d = Point2D(x=self._axis_value(end, axes.width_axis), y=self._axis_value(end, axes.height_axis))
+            if self._same_2d_point(start_2d, end_2d):
+                continue
+            segments.append((str(record["id"]), start_2d, end_2d))
+
+        return segments
+
+    def _isometric_silhouette_segments(
+        self,
+        model: CanonicalCadModel,
+        view_direction: tuple[float, float, float],
+        projected_triangles: list[tuple[tuple[Point2D, float], tuple[Point2D, float], tuple[Point2D, float]]],
+    ) -> list[tuple[str, Point2D, Point2D]]:
+        triangles = model.primary_shape.source_triangles
+        if not triangles:
+            return []
+
+        edge_records: dict[tuple[tuple[float, float], tuple[float, float]], dict[str, object]] = {}
+
+        for triangle in triangles:
+            normal = self._triangle_normal_3d(triangle.a, triangle.b, triangle.c)
+            if normal is None:
+                continue
+            facing = normal[0] * view_direction[0] + normal[1] * view_direction[1] + normal[2] * view_direction[2] > 1e-6
+            for start, end in ((triangle.a, triangle.b), (triangle.b, triangle.c), (triangle.c, triangle.a)):
+                start_2d = self._project_isometric_point(start.x, start.y, start.z)
+                end_2d = self._project_isometric_point(end.x, end.y, end.z)
+                if self._same_2d_point(start_2d, end_2d):
+                    continue
+                key = self._segment_key(start_2d, end_2d)
+                record = edge_records.setdefault(
+                    key,
+                    {
+                        "id": f"silhouette-{len(edge_records) + 1}",
+                        "start": start_2d,
+                        "end": end_2d,
+                        "facing": [],
+                        "depth_start": start.x * view_direction[0] + start.y * view_direction[1] + start.z * view_direction[2],
+                        "depth_end": end.x * view_direction[0] + end.y * view_direction[1] + end.z * view_direction[2],
+                    },
+                )
+                facings = record["facing"]
+                if isinstance(facings, list):
+                    facings.append(facing)
+
+        segments: list[tuple[str, Point2D, Point2D]] = []
+        for record in edge_records.values():
+            facings = record["facing"]
+            if not isinstance(facings, list) or not facings:
+                continue
+            is_boundary = len(facings) == 1 and bool(facings[0])
+            is_silhouette = any(facings) and not all(facings)
+            if not is_boundary and not is_silhouette:
+                continue
+            start = record["start"]
+            end = record["end"]
+            depth_start = record["depth_start"]
+            depth_end = record["depth_end"]
+            if not isinstance(start, Point2D) or not isinstance(end, Point2D):
+                continue
+            if not isinstance(depth_start, float) or not isinstance(depth_end, float):
+                continue
+            if projected_triangles and not self._isometric_edge_visible_against_triangles(start, end, depth_start, depth_end, projected_triangles):
+                continue
+            segments.append((str(record["id"]), start, end))
+
+        return segments
+
+    def _orthographic_view_direction(self, depth_axis: str) -> tuple[float, float, float]:
+        if depth_axis == "x":
+            return (-1.0, 0.0, 0.0)
+        if depth_axis == "y":
+            return (0.0, -1.0, 0.0)
+        return (0.0, 0.0, -1.0)
+
+    def _point_key_3d(self, point: Point3D) -> tuple[float, float, float]:
+        return (round(point.x, 6), round(point.y, 6), round(point.z, 6))
+
     def _edge_has_front_facing_normal(self, edge, view_direction: tuple[float, float, float]) -> bool:
         for normal in edge.adjacent_normals:
             if normal.x * view_direction[0] + normal.y * view_direction[1] + normal.z * view_direction[2] > 1e-6:
@@ -543,6 +763,111 @@ class OcctProjectionAdapter(ProjectionAdapter):
         start = (round(a.x, 5), round(a.y, 5))
         end = (round(b.x, 5), round(b.y, 5))
         return tuple(sorted([start, end]))  # type: ignore[return-value]
+
+    def _point_key_2d(self, point: Point2D) -> tuple[float, float]:
+        return (round(point.x, 5), round(point.y, 5))
+
+    def _stitch_projected_edges(self, edges: list[ProjectedEdge], *, id_prefix: str) -> list[ProjectedEdge]:
+        if len(edges) <= 1:
+            return edges
+
+        adjacency: dict[tuple[float, float], list[int]] = {}
+        for index, edge in enumerate(edges):
+            if len(edge.points) < 2:
+                continue
+            adjacency.setdefault(self._point_key_2d(edge.points[0]), []).append(index)
+            adjacency.setdefault(self._point_key_2d(edge.points[-1]), []).append(index)
+
+        used: set[int] = set()
+        stitched: list[ProjectedEdge] = []
+        chain_index = 0
+
+        def oriented_points(edge: ProjectedEdge, start_key: tuple[float, float]) -> list[Point2D]:
+            if self._point_key_2d(edge.points[0]) == start_key:
+                return list(edge.points)
+            return list(reversed(edge.points))
+
+        def walk(start_edge_index: int, start_key: tuple[float, float]) -> list[Point2D]:
+            current_edge_index = start_edge_index
+            current_start_key = start_key
+            points: list[Point2D] = []
+
+            while True:
+                edge = edges[current_edge_index]
+                edge_points = oriented_points(edge, current_start_key)
+                if not points:
+                    points.extend(edge_points)
+                else:
+                    points.extend(edge_points[1:])
+                used.add(current_edge_index)
+
+                current_end_key = self._point_key_2d(edge_points[-1])
+                next_candidates = [candidate for candidate in adjacency.get(current_end_key, []) if candidate not in used]
+                if len(adjacency.get(current_end_key, [])) != 2 or not next_candidates:
+                    break
+                next_edge_index = next_candidates[0]
+                current_edge_index = next_edge_index
+                current_start_key = current_end_key
+
+            return points
+
+        for node_key, incident_edges in adjacency.items():
+            if len(incident_edges) == 2:
+                continue
+            for edge_index in incident_edges:
+                if edge_index in used:
+                    continue
+                points = walk(edge_index, node_key)
+                if len(points) < 2:
+                    continue
+                source_edge = edges[edge_index]
+                if len(points) == 2 and self._same_2d_point(points[0], points[1]):
+                    continue
+                chain_index += 1
+                stitched.append(
+                    ProjectedEdge(
+                        id=f"{id_prefix}-{chain_index}",
+                        points=points,
+                        source_ref=source_edge.source_ref,
+                        style_role=source_edge.style_role,
+                    )
+                )
+
+        for edge_index, edge in enumerate(edges):
+            if edge_index in used:
+                continue
+            start_key = self._point_key_2d(edge.points[0])
+            points = walk(edge_index, start_key)
+            if len(points) < 2:
+                continue
+            if self._point_key_2d(points[0]) == self._point_key_2d(points[-1]):
+                points = points[:-1]
+            chain_index += 1
+            stitched.append(
+                ProjectedEdge(
+                    id=f"{id_prefix}-{chain_index}",
+                    points=points,
+                    source_ref=edge.source_ref,
+                    style_role=edge.style_role,
+                )
+            )
+
+        return stitched or edges
+
+    def _segment_on_projected_outline(self, start: Point2D, end: Point2D, width: float, height: float) -> bool:
+        eps = max(width, height, 1.0) * 1e-5
+
+        def close(value: float, target: float) -> bool:
+            return abs(value - target) <= eps
+
+        return any(
+            (
+                close(start.x, 0.0) and close(end.x, 0.0),
+                close(start.x, width) and close(end.x, width),
+                close(start.y, 0.0) and close(end.y, 0.0),
+                close(start.y, height) and close(end.y, height),
+            )
+        )
 
 
     def _circle_centers(self, width: float, height: float, count: int) -> list[Point2D]:

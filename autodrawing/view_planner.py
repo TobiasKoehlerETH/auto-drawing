@@ -3,7 +3,28 @@ from __future__ import annotations
 from collections.abc import Iterable
 
 from .contracts import Bounds2D, CanonicalCadModel, FeatureHint, ProjectionBundle, ProjectionType, ViewPlacement
-from .standards import DEFAULT_VIEW_GAP_MM, ISOMETRIC_AREA_MM, MAIN_VIEW_AREA_MM
+from .standards import (
+    DEFAULT_VIEW_GAP_MM,
+    ISOMETRIC_AREA_MM,
+    ISOMETRIC_VIEW_SCALE,
+    MAIN_VIEW_AREA_MM,
+    ORTHOGRAPHIC_VIEW_SCALE,
+)
+
+
+def is_plate_like(model: CanonicalCadModel) -> bool:
+    size = model.primary_shape.bounding_box.size
+    longest = max(size.x, size.y, size.z, 1.0)
+    shortest = min(size.x, size.y, size.z)
+    return shortest / longest <= 0.18
+
+
+def primary_orthographic_view_kind(model: CanonicalCadModel) -> str:
+    return "top" if is_plate_like(model) else "front"
+
+
+def default_view_scale(view_kind: str) -> float:
+    return ISOMETRIC_VIEW_SCALE if view_kind == "isometric" else ORTHOGRAPHIC_VIEW_SCALE
 
 
 def select_hidden_line_policy(model: CanonicalCadModel, view_name: str, default: bool = True) -> bool:
@@ -33,38 +54,28 @@ def plan_view_pack(
     geometry_by_kind = {view.kind: view for view in projection.views}
     gap = DEFAULT_VIEW_GAP_MM
 
-    front = geometry_by_kind.get("front")
-    top = geometry_by_kind.get("top")
+    primary_kind = primary_orthographic_view_kind(model)
+    secondary_vertical_kind = "front" if primary_kind == "top" else "top"
+
     right = geometry_by_kind.get("right")
     iso = geometry_by_kind.get("isometric")
+    primary = geometry_by_kind.get(primary_kind)
+    secondary_vertical = geometry_by_kind.get(secondary_vertical_kind)
 
-    if not front:
+    if not primary:
         return {}
 
     main_w = MAIN_VIEW_AREA_MM["width"]
     main_h = MAIN_VIEW_AREA_MM["height"]
+    scale = ORTHOGRAPHIC_VIEW_SCALE
 
-    horizontal_units = front.bounds.width
-    vertical_units = front.bounds.height
-    if right:
-        horizontal_units += gap + right.bounds.width
-    if top:
-        vertical_units += gap + top.bounds.height
-
-    scale = min(
-        1.85,
-        main_w / max(horizontal_units, 1.0),
-        main_h / max(vertical_units, 1.0),
-    )
-    scale = max(scale, 0.45)
-
-    scaled_front_w = front.bounds.width * scale
-    scaled_front_h = front.bounds.height * scale
+    scaled_primary_w = primary.bounds.width * scale
+    scaled_primary_h = primary.bounds.height * scale
     scaled_right_w = right.bounds.width * scale if right else 0.0
-    scaled_top_h = top.bounds.height * scale if top else 0.0
+    scaled_secondary_h = secondary_vertical.bounds.height * scale if secondary_vertical else 0.0
 
-    total_w = scaled_front_w + (gap + scaled_right_w if right else 0.0)
-    total_h = scaled_front_h + (gap + scaled_top_h if top else 0.0)
+    total_w = scaled_primary_w + (gap + scaled_right_w if right else 0.0)
+    total_h = scaled_primary_h + (gap + scaled_secondary_h if secondary_vertical else 0.0)
 
     left = MAIN_VIEW_AREA_MM["x"] + max((main_w - total_w) / 2.0, 0.0)
     top_y = MAIN_VIEW_AREA_MM["y"] + max((main_h - total_h) / 2.0, 0.0)
@@ -72,32 +83,32 @@ def plan_view_pack(
     placements: dict[str, ViewPlacement] = {}
 
     if projection_type == "first-angle":
-        front_left = left + (scaled_right_w + gap if right else 0.0)
-        front_top = top_y
+        primary_left = left + (scaled_right_w + gap if right else 0.0)
+        primary_top = top_y
         right_left = left
-        top_top = front_top + scaled_front_h + gap
+        secondary_vertical_top = primary_top + scaled_primary_h + gap
     else:
-        front_left = left
-        front_top = top_y + (scaled_top_h + gap if top else 0.0)
-        right_left = front_left + scaled_front_w + gap
-        top_top = top_y
+        primary_left = left
+        primary_top = top_y + (scaled_secondary_h + gap if secondary_vertical else 0.0)
+        right_left = primary_left + scaled_primary_w + gap
+        secondary_vertical_top = top_y
 
-    front_bottom = front_top + scaled_front_h
-    placements["front"] = ViewPlacement(x_mm=front_left, y_mm=front_bottom, scale=scale)
+    primary_bottom = primary_top + scaled_primary_h
+    placements[primary_kind] = ViewPlacement(x_mm=primary_left, y_mm=primary_bottom, scale=default_view_scale(primary_kind))
 
-    if top:
-        top_bottom = top_top + scaled_top_h
-        placements["top"] = ViewPlacement(x_mm=front_left, y_mm=top_bottom, scale=scale)
+    if secondary_vertical:
+        secondary_vertical_bottom = secondary_vertical_top + scaled_secondary_h
+        placements[secondary_vertical_kind] = ViewPlacement(
+            x_mm=primary_left,
+            y_mm=secondary_vertical_bottom,
+            scale=default_view_scale(secondary_vertical_kind),
+        )
 
     if right:
-        placements["right"] = ViewPlacement(x_mm=right_left, y_mm=front_bottom, scale=scale)
+        placements["right"] = ViewPlacement(x_mm=right_left, y_mm=primary_bottom, scale=default_view_scale("right"))
 
     if iso:
-        iso_scale = min(
-            max(scale * 0.72, 0.42),
-            ISOMETRIC_AREA_MM["width"] / max(iso.bounds.width, 1.0),
-            ISOMETRIC_AREA_MM["height"] / max(iso.bounds.height, 1.0),
-        )
+        iso_scale = default_view_scale("isometric")
         iso_left = ISOMETRIC_AREA_MM["x"] + max((ISOMETRIC_AREA_MM["width"] - iso.bounds.width * iso_scale) / 2.0, 0.0)
         iso_top = ISOMETRIC_AREA_MM["y"] + max((ISOMETRIC_AREA_MM["height"] - iso.bounds.height * iso_scale) / 2.0, 0.0)
         placements["isometric"] = ViewPlacement(

@@ -23,7 +23,15 @@ class PreviewApiTests(unittest.TestCase):
         self.assertIn("preview_id", payload)
         self.assertIn("svg", payload)
         self.assertTrue(payload["views"])
+        orthographic_scales = {view["scale"] for view in payload["views"] if view["kind"] != "isometric"}
+        self.assertEqual(len(orthographic_scales), 1)
+        self.assertEqual(next(iter(orthographic_scales)), 1.0)
+        self.assertEqual(next(view["scale"] for view in payload["views"] if view["kind"] == "isometric"), 0.5)
         self.assertEqual(payload["document"]["page_template"]["id"], "iso-a3-landscape")
+        self.assertTrue(payload["document"]["page_template"]["source_path"])
+        self.assertFalse(payload["scene_graph"]["layers"]["frame"])
+        self.assertFalse(payload["scene_graph"]["layers"]["titleBlock"])
+        self.assertTrue(payload["tracked_draw_bridge_available"])
 
     def test_preview_command_updates_selected_view(self):
         create = self.client.post(

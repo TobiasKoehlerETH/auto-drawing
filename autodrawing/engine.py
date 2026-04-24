@@ -14,6 +14,7 @@ import pythoncom
 from win32com.client import Dispatch, VARIANT, gencache, makepy
 
 from .models import BoundingBox, DrawingPlan, GenerationRequest, OutputPaths, PartProfile, ValidationReport, ViewSpec
+from .standards import ISOMETRIC_VIEW_SCALE, ORTHOGRAPHIC_VIEW_SCALE
 
 SKILL_SCRIPTS = Path(r"C:\Users\KOETOB\.codex\skills\solidworks-automation\scripts")
 if str(SKILL_SCRIPTS) not in sys.path:
@@ -501,7 +502,7 @@ class DrawingEngine:
 
     def _build_plan(self, profile: PartProfile, request: GenerationRequest) -> DrawingPlan:
         ortho_scale = self._compute_ortho_scale(profile)
-        recognition_scale = min(0.5, ortho_scale)
+        recognition_scale = ISOMETRIC_VIEW_SCALE
         slots = VIEW_POSITIONS[request.projection]
         projection_text = request.projection.upper().replace("-", " ")
         title = request.input_path.stem.replace("_", " ").upper()
@@ -585,15 +586,8 @@ class DrawingEngine:
         )
 
     def _compute_ortho_scale(self, profile: PartProfile) -> float:
-        available_width = 0.16
-        available_height = 0.10
-        width_scale = available_width / max(profile.bounding_box.longest, 0.001)
-        height_scale = available_height / max(profile.bounding_box.middle, 0.001)
-        raw = min(1.0, width_scale, height_scale)
-        for candidate in (1.0, 0.75, 0.5, 0.25):
-            if raw >= candidate:
-                return candidate
-        return 0.25
+        _ = profile
+        return ORTHOGRAPHIC_VIEW_SCALE
 
     def _create_views(self, drawing, plan: DrawingPlan, model_path: str, logger: TraceLogger) -> dict[str, dict[str, Any]]:
         clear_sheet_views(drawing)

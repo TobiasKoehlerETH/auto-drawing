@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field, model_validator
 SchemaVersion = Literal["1.0"]
 Units = Literal["mm", "cm", "m", "in"]
 ProjectionType = Literal["first-angle", "third-angle"]
-ViewKind = Literal["front", "top", "right", "isometric", "section", "detail"]
+ViewKind = Literal["front", "top", "right", "left", "rear", "bottom", "isometric", "section", "detail"]
 ModeKind = Literal["preview", "final"]
 Severity = Literal["info", "warning", "error"]
 ValidationStatus = Literal["pass", "warning", "needs_review", "fail"]
@@ -265,7 +265,7 @@ class ProjectionBundle(BaseModel):
     schema_version: SchemaVersion = "1.0"
     model_name: str
     mode: ModeKind
-    adapter: Literal["occt", "techdraw-oracle"] = "occt"
+    adapter: Literal["occt", "techdraw-native", "techdraw-oracle"] = "occt"
     views: list[ProjectedViewGeometry]
 
 
@@ -293,6 +293,9 @@ class DrawingView(BaseModel):
     source_ref: ProjectionSourceRef
     placement: ViewPlacement
     local_bounds: Bounds2D
+    parent_view_id: str | None = None
+    projection_role: str | None = None
+    techdraw_type: str | None = None
 
 
 class AnchorRef(BaseModel):
@@ -317,6 +320,9 @@ class DimensionObject(BaseModel):
     anchor_b: AnchorRef
     placement: AnnotationPlacement
     style_profile: Literal["iso"] = "iso"
+    measurement_type: Literal["True", "Projected"] | None = None
+    references: list[str] = Field(default_factory=list)
+    format_spec: str | None = None
 
 
 class NoteObject(BaseModel):
@@ -340,6 +346,7 @@ class BalloonObject(BaseModel):
     view_id: str
     text: str
     placement: AnnotationPlacement
+    leader_points: list[Point2D] = Field(default_factory=list)
 
 
 class TitleBlockField(BaseModel):
@@ -349,6 +356,7 @@ class TitleBlockField(BaseModel):
     placement: AnnotationPlacement
     width_mm: float = 28.0
     editable: bool = True
+    autofill_key: str | None = None
 
 
 class PageTemplateDefinition(BaseModel):
@@ -356,6 +364,8 @@ class PageTemplateDefinition(BaseModel):
     name: str
     svg_source: str
     field_ids: list[str] = Field(default_factory=list)
+    source_path: str | None = None
+    editable_metadata: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
 
 class ProjectionGroupLayout(BaseModel):
@@ -395,6 +405,7 @@ class DrawingDocument(BaseModel):
     display_transforms: dict[str, str] = Field(default_factory=dict)
     commands: list[DrawingCommand] = Field(default_factory=list)
     redo_commands: list[DrawingCommand] = Field(default_factory=list)
+    techdraw_runtime: dict[str, Any] = Field(default_factory=dict)
 
 
 class SceneItem(BaseModel):

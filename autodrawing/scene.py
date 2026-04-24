@@ -15,6 +15,7 @@ from .view_planner import placed_bounds
 
 class SceneGraphService:
     def build_scene(self, document: DrawingDocument, projection: ProjectionBundle) -> SceneGraph:
+        use_exact_template = bool(document.page_template.source_path and document.page_template.svg_source.strip())
         layers = {  # type: ignore[var-annotated]
             "frame": [],
             "titleBlock": [],
@@ -28,33 +29,34 @@ class SceneGraphService:
             "selectionOverlay": [],
         }
 
-        layers["frame"].append(
-            SceneItem(
-                id="sheet-frame",
-                layer="frame",
-                kind="rect",
-                x=5.0,
-                y=5.0,
-                width=document.sheet.width_mm - 10.0,
-                height=document.sheet.height_mm - 10.0,
-                classes=["sheet-frame"],
-            )
-        )
-
-        layers["titleBlock"].extend(self._template_items())
-        for field in document.title_block_fields:
-            layers["titleBlock"].append(
+        if not use_exact_template:
+            layers["frame"].append(
                 SceneItem(
-                    id=field.id,
-                    layer="titleBlock",
-                    kind="text",
-                    x=field.placement.x_mm,
-                    y=field.placement.y_mm,
-                    text=f"{field.label}: {field.value}",
-                    classes=["title-block-field"],
-                    meta={"target_id": field.id},
+                    id="sheet-frame",
+                    layer="frame",
+                    kind="rect",
+                    x=5.0,
+                    y=5.0,
+                    width=document.sheet.width_mm - 10.0,
+                    height=document.sheet.height_mm - 10.0,
+                    classes=["sheet-frame"],
                 )
             )
+
+            layers["titleBlock"].extend(self._template_items())
+            for field in document.title_block_fields:
+                layers["titleBlock"].append(
+                    SceneItem(
+                        id=field.id,
+                        layer="titleBlock",
+                        kind="text",
+                        x=field.placement.x_mm,
+                        y=field.placement.y_mm,
+                        text=f"{field.label}: {field.value}",
+                        classes=["title-block-field"],
+                        meta={"target_id": field.id},
+                    )
+                )
 
         geometry_by_id = {geometry.id: geometry for geometry in projection.views}
         for view in document.views:

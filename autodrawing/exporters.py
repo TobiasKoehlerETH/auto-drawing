@@ -3,6 +3,7 @@ from __future__ import annotations
 import subprocess
 import tempfile
 from pathlib import Path
+from xml.etree import ElementTree as ET
 
 from .contracts import PipelineBundle, SceneGraph, SceneItem
 from .view_planner import placed_bounds
@@ -40,8 +41,12 @@ class HtmlExportService:
     def render_svg(self, bundle: PipelineBundle) -> str:
         scene = bundle.scene_graph
         body: list[str] = []
+        use_template_background = bool(bundle.document.page_template.source_path and bundle.document.page_template.svg_source.strip())
 
-        for layer_name in ("frame", "titleBlock"):
+        if use_template_background:
+            body.extend(self._render_template_background(bundle.document.page_template.svg_source))
+
+        for layer_name in (() if use_template_background else ("frame", "titleBlock")):
             for item in scene.layers.get(layer_name, []):
                 body.append(self._render_item(item))
 
@@ -73,6 +78,13 @@ class HtmlExportService:
             + "".join(body)
             + "</svg>"
         )
+
+    def _render_template_background(self, svg_source: str) -> list[str]:
+        try:
+            root = ET.fromstring(svg_source)
+        except ET.ParseError:
+            return [svg_source]
+        return [ET.tostring(child, encoding="unicode") for child in list(root)]
 
     def _group_items(self, scene: SceneGraph) -> dict[str, list[SceneItem]]:
         ordered_layers = ("viewGeometryVisible", "viewGeometryHidden", "sectionHatch", "centerlines", "notes")

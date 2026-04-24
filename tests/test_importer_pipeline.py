@@ -1,11 +1,64 @@
 import unittest
+from math import cos, pi, sin
 from pathlib import Path
 
+from autodrawing.contracts import ImportedFloatArray, ImportedIndexArray, ImportedMeshAttributes, ImportedMeshPayload
 from autodrawing.importers import StepImportError, StepImportService
 from autodrawing.pipeline import AutodrawingPipeline
 
 
 class ImporterPipelineTests(unittest.TestCase):
+    def _has_vertical_outline(self, view, x_value: float) -> bool:
+        for edge in view.visible_edges:
+            xs = {round(point.x, 2) for point in edge.points}
+            ys = [round(point.y, 2) for point in edge.points]
+            if xs == {round(x_value, 2)} and min(ys) == 0.0 and max(ys) == round(view.bounds.height, 2):
+                return True
+        return False
+
+    def _visible_verticals(self, view) -> set[float]:
+        verticals: set[float] = set()
+        for edge in view.visible_edges:
+            xs = {round(point.x, 2) for point in edge.points}
+            if len(xs) == 1:
+                verticals.add(next(iter(xs)))
+        return verticals
+
+    def _cylinder_mesh(self, radius: float = 10.0, height: float = 24.0, segments: int = 24) -> ImportedMeshPayload:
+        positions: list[float] = []
+        indices: list[int] = []
+
+        for index in range(segments):
+            angle = (2 * pi * index) / segments
+            positions.extend([radius * cos(angle), radius * sin(angle), 0.0])
+        for index in range(segments):
+            angle = (2 * pi * index) / segments
+            positions.extend([radius * cos(angle), radius * sin(angle), height])
+
+        bottom_center_index = len(positions) // 3
+        positions.extend([0.0, 0.0, 0.0])
+        top_center_index = len(positions) // 3
+        positions.extend([0.0, 0.0, height])
+
+        for index in range(segments):
+            next_index = (index + 1) % segments
+            bottom_a = index
+            bottom_b = next_index
+            top_a = index + segments
+            top_b = next_index + segments
+
+            indices.extend([bottom_a, bottom_b, top_b])
+            indices.extend([bottom_a, top_b, top_a])
+
+            indices.extend([bottom_center_index, bottom_b, bottom_a])
+            indices.extend([top_center_index, top_a, top_b])
+
+        return ImportedMeshPayload(
+            name="synthetic-cylinder",
+            index=ImportedIndexArray(array=indices),
+            attributes=ImportedMeshAttributes(position=ImportedFloatArray(array=positions)),
+        )
+
     def test_importer_extracts_units_and_bbox(self):
         model = StepImportService().import_file("fixtures/step/simple-block.step")
 
@@ -48,19 +101,20 @@ class ImporterPipelineTests(unittest.TestCase):
         kinds = {view.kind for view in bundle.projection.views}
         isometric = next(view for view in bundle.projection.views if view.kind == "isometric")
 
-        self.assertEqual(bundle.projection.adapter, "occt")
+        self.assertEqual(bundle.projection.adapter, "techdraw-native")
         self.assertTrue({"front", "top", "right", "isometric"} <= kinds)
         self.assertTrue(bundle.scene_graph.layers["centerlines"])
         self.assertFalse(isometric.hidden_edges)
 
-    def test_plate_like_part_uses_broad_face_as_front_view(self):
+    def test_plate_like_part_uses_broad_face_as_top_view(self):
         bundle = AutodrawingPipeline().from_step_file("fixtures/step/hole-pattern.step", mode="final")
         front = next(view for view in bundle.projection.views if view.kind == "front")
         top = next(view for view in bundle.projection.views if view.kind == "top")
 
-        self.assertGreater(front.bounds.height, 50.0)
-        self.assertLess(top.bounds.height, front.bounds.height)
-        self.assertGreater(front.bounds.width * front.bounds.height, top.bounds.width * top.bounds.height)
+        self.assertEqual(bundle.projection.views[0].kind, "top")
+        self.assertGreater(top.bounds.height, 50.0)
+        self.assertLess(front.bounds.height, top.bounds.height)
+        self.assertGreater(top.bounds.width * top.bounds.height, front.bounds.width * front.bounds.height)
 
     def test_cube_isometric_shows_only_visible_wireframe_edges(self):
         bundle = AutodrawingPipeline().from_step_file("fixtures/step/cube-30.step", mode="final")
@@ -76,6 +130,7 @@ class ImporterPipelineTests(unittest.TestCase):
 
         bundle = AutodrawingPipeline().from_step_file(sample, mode="final")
         front = next(view for view in bundle.projection.views if view.kind == "front")
+        right = next(view for view in bundle.projection.views if view.kind == "right")
         iso_faces = [
             item
             for item in bundle.scene_graph.layers["viewGeometryVisible"]
@@ -83,7 +138,27 @@ class ImporterPipelineTests(unittest.TestCase):
         ]
 
         self.assertTrue(any(edge.id.startswith("front-step-edge-") for edge in front.visible_edges))
+        self.assertTrue(self._has_vertical_outline(front, 0.0))
+        self.assertTrue(self._has_vertical_outline(front, front.bounds.width))
+        self.assertTrue(self._has_vertical_outline(right, 0.0))
+        self.assertTrue(self._has_vertical_outline(right, right.bounds.width))
+        self.assertEqual(self._visible_verticals(front), {0.0, round(front.bounds.width, 2)})
+        self.assertEqual(self._visible_verticals(right), {0.0, round(right.bounds.width, 2)})
         self.assertTrue(iso_faces)
+
+    def test_occt_mesh_projection_adds_orthographic_silhouettes(self):
+        bundle = AutodrawingPipeline().from_occt_meshes([self._cylinder_mesh()], source_name="cylinder.step", mode="final")
+        front = next(view for view in bundle.projection.views if view.kind == "front")
+
+        self.assertTrue(any(edge.id.startswith("front-silhouette-") for edge in front.visible_edges))
+        self.assertTrue(self._has_vertical_outline(front, 0.0))
+        self.assertTrue(self._has_vertical_outline(front, front.bounds.width))
+
+    def test_occt_mesh_projection_adds_isometric_silhouettes(self):
+        bundle = AutodrawingPipeline().from_occt_meshes([self._cylinder_mesh()], source_name="cylinder.step", mode="final")
+        isometric = next(view for view in bundle.projection.views if view.kind == "isometric")
+
+        self.assertTrue(any(len(edge.points) > 2 for edge in isometric.visible_edges))
 
 
 if __name__ == "__main__":

@@ -17,17 +17,19 @@ from .contracts import (
 )
 from .standards import DEFAULT_PROJECTION, ISO_A3_LANDSCAPE_MM, STANDARD_PROFILE
 from .templates import build_default_template
-from .view_planner import plan_view_pack
+from .view_planner import default_view_scale, plan_view_pack, primary_orthographic_view_kind
 
 
 class DrawingDocumentService:
     def create_document(self, model: CanonicalCadModel, projection: ProjectionBundle) -> DrawingDocument:
         placements = plan_view_pack(projection, model, DEFAULT_PROJECTION)
         template, title_block_fields = build_default_template(model)
+        anchor_view_id = f"view-{primary_orthographic_view_kind(model)}"
 
         views: list[DrawingView] = []
         for geometry in projection.views:
-            placement = placements.get(geometry.kind, ViewPlacement(x_mm=40.0, y_mm=80.0, scale=1.0))
+            placement = placements.get(geometry.kind, ViewPlacement(x_mm=40.0, y_mm=80.0, scale=default_view_scale(geometry.kind)))
+            placement = self._normalized_view_placement(geometry.kind, placement)
             views.append(
                 DrawingView(
                     id=f"view-{geometry.kind}",
@@ -71,7 +73,7 @@ class DrawingDocumentService:
             ),
             page_template=template,
             projection_group=ProjectionGroupLayout(
-                anchor_view_id="view-front",
+                anchor_view_id=anchor_view_id,
                 ordered_view_ids=[view.id for view in views],
                 projection=DEFAULT_PROJECTION,
             ),
@@ -173,7 +175,12 @@ class DrawingDocumentService:
         planned = plan_view_pack(projection, model, regenerated.sheet.projection)
         regenerated.views.clear()
         for geometry in projection.views:
-            placement = existing.get(geometry.kind) or planned.get(geometry.kind) or ViewPlacement(x_mm=40.0, y_mm=80.0, scale=1.0)
+            placement = existing.get(geometry.kind) or planned.get(geometry.kind) or ViewPlacement(
+                x_mm=40.0,
+                y_mm=80.0,
+                scale=default_view_scale(geometry.kind),
+            )
+            placement = self._normalized_view_placement(geometry.kind, placement)
             regenerated.views.append(
                 DrawingView(
                     id=f"view-{geometry.kind}",
@@ -186,6 +193,7 @@ class DrawingDocumentService:
                 )
             )
         regenerated.view_order = [view.id for view in regenerated.views]
+        regenerated.projection_group.anchor_view_id = f"view-{primary_orthographic_view_kind(model)}"
         regenerated.projection_group.ordered_view_ids = regenerated.view_order[:]
         return regenerated
 
@@ -196,6 +204,11 @@ class DrawingDocumentService:
                 if item.id == target_id:
                     return item
         return None
+
+    def _normalized_view_placement(self, view_kind: str, placement: ViewPlacement) -> ViewPlacement:
+        normalized = placement.model_copy(deep=True)
+        normalized.scale = default_view_scale(view_kind)
+        return normalized
 
     def _build_bom_rows(self, model: CanonicalCadModel) -> list[BomRow]:
         rows: list[BomRow] = []

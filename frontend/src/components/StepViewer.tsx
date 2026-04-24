@@ -33,6 +33,8 @@ const VIEW_MODES: { id: ViewMode; label: string; icon: typeof Box }[] = [
   { id: "hidden-line", label: "B&W", icon: Contrast },
 ];
 
+const CAMERA_FIT_PADDING = 1.12;
+
 interface StepViewerProps {
   model: ImportResult | null;
   loading?: boolean;
@@ -46,6 +48,7 @@ export function StepViewer({ model, loading = false }: StepViewerProps) {
   const controlsRef = useRef<OrbitControls | null>(null);
   const faceGroupRef = useRef<THREE.Group | null>(null);
   const edgeGroupRef = useRef<THREE.Group | null>(null);
+  const outlineGroupRef = useRef<THREE.Group | null>(null);
   const gridRef = useRef<THREE.GridHelper | null>(null);
   const axesRef = useRef<THREE.AxesHelper | null>(null);
 
@@ -112,10 +115,13 @@ export function StepViewer({ model, loading = false }: StepViewerProps) {
 
     const faceGroup = new THREE.Group();
     const edgeGroup = new THREE.Group();
+    const outlineGroup = new THREE.Group();
     scene.add(faceGroup);
+    scene.add(outlineGroup);
     scene.add(edgeGroup);
     faceGroupRef.current = faceGroup;
     edgeGroupRef.current = edgeGroup;
+    outlineGroupRef.current = outlineGroup;
 
     let raf = 0;
     const tick = () => {
@@ -145,6 +151,7 @@ export function StepViewer({ model, loading = false }: StepViewerProps) {
       controlsRef.current = null;
       faceGroupRef.current = null;
       edgeGroupRef.current = null;
+      outlineGroupRef.current = null;
       gridRef.current = null;
       axesRef.current = null;
     };
@@ -158,12 +165,14 @@ export function StepViewer({ model, loading = false }: StepViewerProps) {
   useEffect(() => {
     const faceGroup = faceGroupRef.current;
     const edgeGroup = edgeGroupRef.current;
+    const outlineGroup = outlineGroupRef.current;
     const camera = cameraRef.current;
     const controls = controlsRef.current;
-    if (!faceGroup || !edgeGroup || !camera || !controls) return;
+    if (!faceGroup || !edgeGroup || !outlineGroup || !camera || !controls) return;
 
     disposeGroup(faceGroup);
     disposeGroup(edgeGroup);
+    disposeGroup(outlineGroup);
 
     if (!model) {
       setStats(null);
@@ -175,20 +184,20 @@ export function StepViewer({ model, loading = false }: StepViewerProps) {
     setError(null);
     setLoadingMessage("Building scene...");
     try {
-      const meshResult = addImportedMeshes(model.meshes ?? [], faceGroup, edgeGroup);
+      const meshResult = addImportedMeshes(model.meshes ?? [], faceGroup, edgeGroup, outlineGroup);
 
       faceGroup.position.sub(meshResult.center);
       edgeGroup.position.sub(meshResult.center);
+      outlineGroup.position.sub(meshResult.center);
 
       const maxDim = Math.max(meshResult.bbox.x, meshResult.bbox.y, meshResult.bbox.z) || 100;
       const dist = maxDim * 2.2;
       camera.position.set(dist, dist * 0.8, dist * 1.1);
       camera.near = Math.max(0.1, maxDim / 500);
       camera.far = maxDim * 50;
-      camera.userData.frustumSize = maxDim * 1.85;
-      updateOrthographicFrustum(camera, getCameraAspect(camera));
       controls.target.set(0, 0, 0);
       camera.lookAt(0, 0, 0);
+      fitOrthographicCameraToSize(camera, meshResult.bbox);
       controls.update();
 
       setStats({
@@ -206,11 +215,13 @@ export function StepViewer({ model, loading = false }: StepViewerProps) {
   useEffect(() => {
     const faceGroup = faceGroupRef.current;
     const edgeGroup = edgeGroupRef.current;
+    const outlineGroup = outlineGroupRef.current;
     const scene = sceneRef.current;
-    if (!faceGroup || !edgeGroup || !scene) return;
+    if (!faceGroup || !edgeGroup || !outlineGroup || !scene) return;
 
     faceGroup.visible = viewMode !== "wireframe";
     edgeGroup.visible = viewMode !== "shaded";
+    outlineGroup.visible = viewMode !== "shaded" && viewMode !== "wireframe";
 
     faceGroup.traverse((obj) => {
       const mesh = obj as THREE.Mesh;
@@ -292,6 +303,34 @@ export function StepViewer({ model, loading = false }: StepViewerProps) {
       mat.needsUpdate = true;
     });
 
+    outlineGroup.traverse((obj) => {
+      const mesh = obj as THREE.Mesh;
+      if (!mesh.isMesh) return;
+      const mat = mesh.material as THREE.MeshBasicMaterial;
+      if (!mat) return;
+
+      switch (viewMode) {
+        case "shaded-edges":
+          mat.color.set(0x0f172a);
+          mat.transparent = true;
+          mat.opacity = 0.92;
+          break;
+        case "transparent":
+          mat.color.set(0x1e293b);
+          mat.transparent = true;
+          mat.opacity = 0.7;
+          break;
+        case "hidden-line":
+          mat.color.set(0x000000);
+          mat.transparent = false;
+          mat.opacity = 1;
+          break;
+        default:
+          break;
+      }
+      mat.needsUpdate = true;
+    });
+
     scene.background = new THREE.Color(0xffffff);
   }, [stats, viewMode]);
 
@@ -307,6 +346,7 @@ export function StepViewer({ model, loading = false }: StepViewerProps) {
     camera.up.set(...(preset.up ?? [0, 1, 0]));
     controls.target.set(0, 0, 0);
     camera.lookAt(0, 0, 0);
+    fitOrthographicCameraToSize(camera, stats.bbox);
     controls.update();
   }
 
@@ -417,8 +457,10 @@ function addImportedMeshes(
   meshes: ImportedMesh[],
   faceGroup: THREE.Group,
   edgeGroup: THREE.Group,
+  outlineGroup: THREE.Group,
 ): { bbox: THREE.Vector3; center: THREE.Vector3; triangles: number } {
   let triangles = 0;
+  const outlineScale = 1.01;
 
   for (const mesh of meshes) {
     const geometry = new THREE.BufferGeometry();
@@ -448,6 +490,21 @@ function addImportedMeshes(
     threeMesh.userData.baseColor = baseColor.clone();
     faceGroup.add(threeMesh);
 
+    const outlineMaterial = new THREE.MeshBasicMaterial({
+      color: 0x0f172a,
+      side: THREE.BackSide,
+      transparent: true,
+      opacity: 0.92,
+      depthWrite: false,
+    });
+    const localCenter = geometry.boundingBox?.getCenter(new THREE.Vector3()) ?? new THREE.Vector3();
+    const outlineMesh = new THREE.Mesh(geometry.clone(), outlineMaterial);
+    outlineMesh.name = `${threeMesh.name}-outline`;
+    outlineMesh.scale.setScalar(outlineScale);
+    outlineMesh.position.copy(localCenter.multiplyScalar(1 - outlineScale));
+    outlineMesh.renderOrder = 1;
+    outlineGroup.add(outlineMesh);
+
     const edgeGeometry = new THREE.EdgesGeometry(geometry, 30);
     const edgeMaterial = new THREE.LineBasicMaterial({
       color: 0x0f172a,
@@ -456,6 +513,7 @@ function addImportedMeshes(
     });
     const edgeLines = new THREE.LineSegments(edgeGeometry, edgeMaterial);
     edgeLines.name = threeMesh.name;
+    edgeLines.renderOrder = 2;
     edgeGroup.add(edgeLines);
 
     triangles += mesh.index.array.length / 3;
@@ -483,4 +541,39 @@ function getCameraAspect(camera: THREE.OrthographicCamera) {
   const width = camera.right - camera.left;
   const height = camera.top - camera.bottom;
   return height === 0 ? 1 : width / height;
+}
+
+function fitOrthographicCameraToSize(camera: THREE.OrthographicCamera, bbox: THREE.Vector3) {
+  const half = bbox.clone().multiplyScalar(0.5);
+  const corners = [
+    new THREE.Vector3(-half.x, -half.y, -half.z),
+    new THREE.Vector3(-half.x, -half.y, half.z),
+    new THREE.Vector3(-half.x, half.y, -half.z),
+    new THREE.Vector3(-half.x, half.y, half.z),
+    new THREE.Vector3(half.x, -half.y, -half.z),
+    new THREE.Vector3(half.x, -half.y, half.z),
+    new THREE.Vector3(half.x, half.y, -half.z),
+    new THREE.Vector3(half.x, half.y, half.z),
+  ];
+
+  camera.updateMatrixWorld(true);
+
+  let minX = Number.POSITIVE_INFINITY;
+  let maxX = Number.NEGATIVE_INFINITY;
+  let minY = Number.POSITIVE_INFINITY;
+  let maxY = Number.NEGATIVE_INFINITY;
+
+  for (const corner of corners) {
+    const projected = corner.applyMatrix4(camera.matrixWorldInverse);
+    minX = Math.min(minX, projected.x);
+    maxX = Math.max(maxX, projected.x);
+    minY = Math.min(minY, projected.y);
+    maxY = Math.max(maxY, projected.y);
+  }
+
+  const aspect = getCameraAspect(camera);
+  const width = Math.max(1, maxX - minX);
+  const height = Math.max(1, maxY - minY);
+  camera.userData.frustumSize = Math.max(height, width / aspect) * CAMERA_FIT_PADDING;
+  updateOrthographicFrustum(camera, aspect);
 }

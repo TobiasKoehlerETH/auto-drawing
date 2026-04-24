@@ -1,7 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Circle, Group, Layer, Line, Path, Rect, Stage, Text } from "react-konva";
+import { Move, ZoomIn, ZoomOut } from "lucide-react";
+import { Circle, Group, Image as KonvaImage, Layer, Line, Path, Rect, Stage, Text } from "react-konva";
 import type { KonvaEventObject } from "konva/lib/Node";
 import type { Stage as KonvaStage } from "konva/lib/Stage";
+
+import { Button } from "./ui/button";
 
 type Bounds2D = {
   x_min: number;
@@ -75,6 +78,12 @@ type DrawingPreview = {
       width_mm: number;
       height_mm: number;
     };
+    page_template: {
+      id: string;
+      name: string;
+      svg_source: string;
+      source_path?: string | null;
+    };
     dimensions: PreviewDimension[];
   };
   scene_graph: {
@@ -95,9 +104,11 @@ type DrawingCanvasProps = {
   preview: DrawingPreview;
   selectedViewId: string | null;
   busy?: boolean;
-  onSelectView: (viewId: string) => void;
+  onSelectView: (viewId: string | null) => void;
   onApplyCommands: (commands: DrawingCommand[]) => Promise<boolean> | boolean;
 };
+
+type Sheet = DrawingPreview["document"]["sheet"];
 
 type Item =
   | { id: string; type: "view"; view: PreviewViewState }
@@ -115,13 +126,6 @@ type Interaction =
       current: Point;
       targetIds: string[];
       initialPositions: Record<string, Point>;
-    }
-  | {
-      type: "scale-selection";
-      viewId: string;
-      start: Point;
-      current: Point;
-      initialScale: number;
     };
 
 type CommitDrafts = {
@@ -153,23 +157,17 @@ export function DrawingCanvas({ preview, selectedViewId, busy = false, onSelectV
   const [hoveredDimensionId, setHoveredDimensionId] = useState<string | null>(null);
   const [interaction, setInteraction] = useState<Interaction>(null);
   const [commitDrafts, setCommitDrafts] = useState<CommitDrafts | null>(null);
-  const [viewBox, setViewBox] = useState<ViewBox>({
-    x: -24,
-    y: -24,
-    width: sheet.width_mm + 48,
-    height: sheet.height_mm + 48,
-  });
+  const [navigationMode, setNavigationMode] = useState<"select" | "pan">("select");
+  const [viewBox, setViewBox] = useState<ViewBox>(() => createSheetViewBox(sheet));
   const [viewportSize, setViewportSize] = useState({ width: 1, height: CANVAS_HEIGHT });
 
   const sceneLayers = preview.scene_graph.layers;
+  const exactTemplateSvg = preview.document.page_template?.svg_source ?? "";
+  const hasExactTemplate = Boolean(preview.document.page_template?.source_path && exactTemplateSvg.trim());
+  const templateImage = useSvgTemplateImage(hasExactTemplate ? exactTemplateSvg : null);
 
   useEffect(() => {
-    setViewBox({
-      x: -24,
-      y: -24,
-      width: sheet.width_mm + 48,
-      height: sheet.height_mm + 48,
-    });
+    setViewBox(createSheetViewBox(sheet));
     setCommitDrafts(null);
   }, [preview.preview_id, sheet.height_mm, sheet.width_mm]);
 
@@ -189,7 +187,11 @@ export function DrawingCanvas({ preview, selectedViewId, busy = false, onSelectV
   }, []);
 
   useEffect(() => {
-    if (selectedViewId && !selectedIds.includes(selectedViewId)) {
+    if (!selectedViewId) {
+      setSelectedIds([]);
+      return;
+    }
+    if (!selectedIds.includes(selectedViewId)) {
       setSelectedIds([selectedViewId]);
     }
   }, [selectedIds, selectedViewId]);
@@ -228,11 +230,6 @@ export function DrawingCanvas({ preview, selectedViewId, busy = false, onSelectV
         return;
       }
 
-      if (interaction.type === "scale-selection") {
-        setInteraction({ ...interaction, current: point });
-        return;
-      }
-
       if (interaction.type === "pan") {
         const node = wrapperRef.current;
         if (!node) return;
@@ -241,11 +238,16 @@ export function DrawingCanvas({ preview, selectedViewId, busy = false, onSelectV
         const dyPx = event.clientY - interaction.startClient.y;
         const dx = (dxPx / rect.width) * interaction.startViewBox.width;
         const dy = (dyPx / rect.height) * interaction.startViewBox.height;
-        setViewBox({
-          ...interaction.startViewBox,
-          x: interaction.startViewBox.x - dx,
-          y: interaction.startViewBox.y - dy,
-        });
+        setViewBox(
+          clampViewBoxToSheet(
+            {
+              ...interaction.startViewBox,
+              x: interaction.startViewBox.x - dx,
+              y: interaction.startViewBox.y - dy,
+            },
+            sheet,
+          ),
+        );
       }
     };
 
@@ -259,7 +261,7 @@ export function DrawingCanvas({ preview, selectedViewId, busy = false, onSelectV
       window.removeEventListener("pointermove", handleWindowMove);
       window.removeEventListener("pointerup", handleWindowUp);
     };
-  }, [interaction, viewBox, preview.views, preview.document.dimensions]);
+  }, [interaction, preview.views, preview.document.dimensions, sheet.height_mm, sheet.width_mm, viewBox]);
 
   const marquee = useMemo(() => {
     if (!interaction || interaction.type !== "marquee") return null;
@@ -268,49 +270,22 @@ export function DrawingCanvas({ preview, selectedViewId, busy = false, onSelectV
 
   const viewDrafts = useMemo(() => {
     const drafts: Record<string, PreviewViewState> = {};
-    if (!interaction) {
+    if (!interaction || interaction.type !== "drag-selection") {
       return drafts;
     }
 
-    if (interaction.type === "drag-selection") {
-      const dx = interaction.current.x - interaction.start.x;
-      const dy = interaction.current.y - interaction.start.y;
-      for (const view of preview.views) {
-        const startPos = interaction.initialPositions[view.id];
-        if (!startPos) continue;
-        drafts[view.id] = {
-          ...view,
-          x_mm: round2(startPos.x + dx),
-          y_mm: round2(startPos.y + dy),
-          selection_bounds_mm: shiftBounds(view.selection_bounds_mm, dx, dy),
-        };
-      }
-      return drafts;
-    }
-
-    if (interaction.type === "scale-selection") {
-      const view = preview.views.find((candidate) => candidate.id === interaction.viewId);
-      if (!view) return drafts;
-      const bounds = view.selection_bounds_mm;
-      const currentWidth = Math.max(bounds.x_max - bounds.x_min, 1);
-      const currentHeight = Math.max(bounds.y_max - bounds.y_min, 1);
-      const nextWidth = currentWidth + (interaction.current.x - interaction.start.x);
-      const nextHeight = currentHeight + (interaction.current.y - interaction.start.y);
-      const factor = Math.max(nextWidth / currentWidth, nextHeight / currentHeight, 0.25);
+    const dx = interaction.current.x - interaction.start.x;
+    const dy = interaction.current.y - interaction.start.y;
+    for (const view of preview.views) {
+      const startPos = interaction.initialPositions[view.id];
+      if (!startPos) continue;
       drafts[view.id] = {
         ...view,
-        scale: round2(interaction.initialScale * factor),
-        width_mm: view.width_mm * factor,
-        height_mm: view.height_mm * factor,
-        selection_bounds_mm: {
-          x_min: bounds.x_min,
-          y_min: bounds.y_min,
-          x_max: bounds.x_min + currentWidth * factor,
-          y_max: bounds.y_min + currentHeight * factor,
-        },
+        x_mm: round2(startPos.x + dx),
+        y_mm: round2(startPos.y + dy),
+        selection_bounds_mm: shiftBounds(view.selection_bounds_mm, dx, dy),
       };
     }
-
     return drafts;
   }, [interaction, preview.views]);
 
@@ -347,20 +322,13 @@ export function DrawingCanvas({ preview, selectedViewId, busy = false, onSelectV
     [commitDrafts?.dimensions, dimensionDrafts, preview.document.dimensions],
   );
 
-  const selectedView =
-    renderedViews.find((view) => selectedIds.includes(view.id)) ??
-    renderedViews.find((view) => view.id === selectedViewId) ??
-    renderedViews[0] ??
-    null;
-  const selectedBounds = selectedView?.selection_bounds_mm ?? null;
-
   const globalItems = useMemo(
     () => [
-      ...(sceneLayers.frame ?? []),
-      ...(sceneLayers.titleBlock ?? []),
+      ...(hasExactTemplate ? [] : (sceneLayers.frame ?? [])),
+      ...(hasExactTemplate ? [] : (sceneLayers.titleBlock ?? [])),
       ...(sceneLayers.notes ?? []).filter((item) => !item.group_id && !item.meta?.view_id),
     ],
-    [sceneLayers.frame, sceneLayers.notes, sceneLayers.titleBlock],
+    [hasExactTemplate, sceneLayers.frame, sceneLayers.notes, sceneLayers.titleBlock],
   );
 
   const itemsByView = useMemo(() => {
@@ -383,6 +351,10 @@ export function DrawingCanvas({ preview, selectedViewId, busy = false, onSelectV
 
   const camera = useMemo(() => makeCamera(viewBox, viewportSize), [viewBox, viewportSize]);
   const gridLines = useMemo(() => getGridLines(viewBox), [viewBox]);
+  const sheetScreenRect = useMemo(
+    () => worldRectToScreen({ x: 0, y: 0, width: sheet.width_mm, height: sheet.height_mm }, camera),
+    [camera, sheet.height_mm, sheet.width_mm],
+  );
 
   const viewOverlays = useMemo(
     () =>
@@ -401,21 +373,6 @@ export function DrawingCanvas({ preview, selectedViewId, busy = false, onSelectV
       })),
     [camera, renderedDimensions, renderedViews],
   );
-
-  const resizeHandleOverlay = useMemo(() => {
-    if (!selectedBounds || !selectedView) return null;
-    const size = handleScreenSize(viewBox, viewportSize);
-    const anchor = worldToScreen({ x: selectedBounds.x_max, y: selectedBounds.y_min }, camera);
-    return {
-      view: selectedView,
-      rect: {
-        x: anchor.x - size.width / 2,
-        y: anchor.y - size.height / 2,
-        width: size.width,
-        height: size.height,
-      },
-    };
-  }, [camera, selectedBounds, selectedView, viewBox, viewportSize]);
 
   function itemBounds(item: Item): Marquee {
     if (item.type === "view") {
@@ -439,16 +396,62 @@ export function DrawingCanvas({ preview, selectedViewId, busy = false, onSelectV
     const dimension = renderedDimensions.find((candidate) => ids.includes(candidate.id));
     if (dimension) {
       onSelectView(dimension.view_id);
+      return;
     }
+    onSelectView(null);
   }
 
   function startPan(clientX: number, clientY: number) {
     setInteraction({ type: "pan", startClient: { x: clientX, y: clientY }, startViewBox: viewBox });
   }
 
+  function shouldStartPan(button: number) {
+    return button === 1 || (button === 0 && navigationMode === "pan");
+  }
+
+  function zoomViewBox(zoomFactor: number, focusPoint?: Point) {
+    setViewBox((current) => {
+      const pointer = focusPoint ?? { x: current.x + current.width / 2, y: current.y + current.height / 2 };
+      return clampViewBoxToSheet(
+        {
+          x: pointer.x - (pointer.x - current.x) * zoomFactor,
+          y: pointer.y - (pointer.y - current.y) * zoomFactor,
+          width: current.width * zoomFactor,
+          height: current.height * zoomFactor,
+        },
+        sheet,
+      );
+    });
+  }
+
+  function zoomFromClientPosition(clientX: number, clientY: number, deltaY: number) {
+    const node = wrapperRef.current;
+    if (!node) return;
+    const rect = node.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return;
+    const sx = clamp((clientX - rect.left) / rect.width, 0, 1);
+    const sy = clamp((clientY - rect.top) / rect.height, 0, 1);
+    const zoomFactor = deltaY < 0 ? 0.9 : 1.1;
+    setViewBox((current) => {
+      const pointer = {
+        x: current.x + sx * current.width,
+        y: current.y + sy * current.height,
+      };
+      return clampViewBoxToSheet(
+        {
+          x: pointer.x - (pointer.x - current.x) * zoomFactor,
+          y: pointer.y - (pointer.y - current.y) * zoomFactor,
+          width: current.width * zoomFactor,
+          height: current.height * zoomFactor,
+        },
+        sheet,
+      );
+    });
+  }
+
   function onBackgroundPointerDown(clientX: number, clientY: number, button: number) {
     if (busy) return;
-    if (button === 1) {
+    if (shouldStartPan(button)) {
       startPan(clientX, clientY);
       return;
     }
@@ -456,6 +459,7 @@ export function DrawingCanvas({ preview, selectedViewId, busy = false, onSelectV
     const point = worldPointFromClient(clientX, clientY, wrapperRef.current, viewBox);
     if (!point) return;
     setSelectedIds([]);
+    onSelectView(null);
     setInteraction({ type: "marquee", start: point, current: point });
   }
 
@@ -476,7 +480,7 @@ export function DrawingCanvas({ preview, selectedViewId, busy = false, onSelectV
 
   function onViewPointerDown(clientX: number, clientY: number, button: number, view: PreviewViewState) {
     if (busy) return;
-    if (button === 1) {
+    if (shouldStartPan(button)) {
       startPan(clientX, clientY);
       return;
     }
@@ -491,7 +495,7 @@ export function DrawingCanvas({ preview, selectedViewId, busy = false, onSelectV
 
   function onDimensionPointerDown(clientX: number, clientY: number, button: number, dimension: PreviewDimension) {
     if (busy) return;
-    if (button === 1) {
+    if (shouldStartPan(button)) {
       startPan(clientX, clientY);
       return;
     }
@@ -553,45 +557,16 @@ export function DrawingCanvas({ preview, selectedViewId, busy = false, onSelectV
         return;
       }
 
-      if (interaction.type === "scale-selection") {
-        const original = preview.views.find((candidate) => candidate.id === interaction.viewId);
-        const draft = renderedViews.find((candidate) => candidate.id === interaction.viewId);
-        setInteraction(null);
-        if (original && draft && original.scale !== draft.scale) {
-          setCommitDrafts({ views: { [draft.id]: draft }, dimensions: {} });
-          const applied = await onApplyCommands([
-            {
-              id: `cmd-scale-${interaction.viewId}-${Date.now()}`,
-              kind: "ChangeViewScale",
-              target_id: interaction.viewId,
-              before: { scale: original.scale },
-              after: { scale: draft.scale },
-            },
-          ]);
-          if (applied === false) {
-            setCommitDrafts(null);
-          }
-        }
-        return;
-      }
-
       setInteraction(null);
     } finally {
       finishingInteractionRef.current = false;
     }
   }
 
-  function onWheel(event: KonvaEventObject<WheelEvent>) {
-    event.evt.preventDefault();
-    const pointer = worldPointFromClient(event.evt.clientX, event.evt.clientY, wrapperRef.current, viewBox);
-    if (!pointer) return;
-    const zoomFactor = event.evt.deltaY < 0 ? 0.9 : 1.1;
-    setViewBox((current) => ({
-      x: pointer.x - (pointer.x - current.x) * zoomFactor,
-      y: pointer.y - (pointer.y - current.y) * zoomFactor,
-      width: current.width * zoomFactor,
-      height: current.height * zoomFactor,
-    }));
+  function onWrapperWheel(event: React.WheelEvent<HTMLDivElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    zoomFromClientPosition(event.clientX, event.clientY, event.deltaY);
   }
 
   function onStageMouseDown(event: KonvaEventObject<MouseEvent>) {
@@ -601,8 +576,34 @@ export function DrawingCanvas({ preview, selectedViewId, busy = false, onSelectV
 
   return (
     <div className="grid gap-4">
-      <div ref={wrapperRef} className="relative h-[780px] overflow-hidden rounded-2xl border border-slate-200 bg-white">
-        <Stage ref={stageRef} width={viewportSize.width} height={viewportSize.height} onMouseDown={onStageMouseDown} onWheel={onWheel}>
+      <div
+        ref={wrapperRef}
+        className={`relative h-[780px] overflow-hidden rounded-2xl border border-slate-200 bg-white ${navigationMode === "pan" ? "cursor-grab" : ""}`}
+        onWheelCapture={onWrapperWheel}
+      >
+        <div className="pointer-events-none absolute right-4 top-4 z-10">
+          <div className="pointer-events-auto flex items-center gap-1 rounded-xl border border-slate-200/90 bg-white/95 p-1 shadow-lg backdrop-blur">
+            <Button
+              type="button"
+              size="icon"
+              variant={navigationMode === "pan" ? "default" : "outline"}
+              aria-label="Pan canvas"
+              aria-pressed={navigationMode === "pan"}
+              title="Pan canvas"
+              onClick={() => setNavigationMode((mode) => (mode === "pan" ? "select" : "pan"))}
+            >
+              <Move />
+            </Button>
+            <Button type="button" size="icon" variant="outline" aria-label="Zoom in" title="Zoom in" onClick={() => zoomViewBox(0.9)}>
+              <ZoomIn />
+            </Button>
+            <Button type="button" size="icon" variant="outline" aria-label="Zoom out" title="Zoom out" onClick={() => zoomViewBox(1.1)}>
+              <ZoomOut />
+            </Button>
+          </div>
+        </div>
+
+        <Stage ref={stageRef} width={viewportSize.width} height={viewportSize.height} onMouseDown={onStageMouseDown}>
           <Layer listening={false}>
             {gridLines.vertical.map((x) => (
               <Line key={`grid-v-${x}`} points={[x, 0, x, viewportSize.height]} stroke="#e2e8f0" strokeWidth={1} />
@@ -611,15 +612,24 @@ export function DrawingCanvas({ preview, selectedViewId, busy = false, onSelectV
               <Line key={`grid-h-${y}`} points={[0, y, viewportSize.width, y]} stroke="#e2e8f0" strokeWidth={1} />
             ))}
             <Rect
-              x={worldToScreen({ x: 0, y: 0 }, camera).x}
-              y={worldToScreen({ x: 0, y: 0 }, camera).y}
-              width={sheet.width_mm * camera.scaleX}
-              height={sheet.height_mm * camera.scaleY}
-              cornerRadius={4}
+              x={sheetScreenRect.x}
+              y={sheetScreenRect.y}
+              width={sheetScreenRect.width}
+              height={sheetScreenRect.height}
               fill="#ffffff"
-              stroke="#cbd5e1"
-              strokeWidth={1.2}
+              stroke={hasExactTemplate ? undefined : "#cbd5e1"}
+              strokeWidth={hasExactTemplate ? 0 : 1.2}
             />
+            {templateImage ? (
+              <KonvaImage
+                x={sheetScreenRect.x}
+                y={sheetScreenRect.y}
+                width={sheetScreenRect.width}
+                height={sheetScreenRect.height}
+                image={templateImage}
+                listening={false}
+              />
+            ) : null}
           </Layer>
 
           <Layer listening={false}>
@@ -647,13 +657,14 @@ export function DrawingCanvas({ preview, selectedViewId, busy = false, onSelectV
               const selected = selectedIds.includes(view.id);
               const bounds = worldRectToScreen(boundsToRect(view.selection_bounds_mm), camera);
               if (!selected) return null;
+              const selectionPadding = 3;
               return (
                 <Rect
                   key={`selection-${view.id}`}
-                  x={bounds.x}
-                  y={bounds.y}
-                  width={bounds.width}
-                  height={bounds.height}
+                  x={bounds.x - selectionPadding}
+                  y={bounds.y - selectionPadding}
+                  width={bounds.width + selectionPadding * 2}
+                  height={bounds.height + selectionPadding * 2}
                   cornerRadius={6}
                   stroke="#2563eb"
                   dash={[4, 3]}
@@ -682,29 +693,6 @@ export function DrawingCanvas({ preview, selectedViewId, busy = false, onSelectV
               />
             ) : null}
 
-            {resizeHandleOverlay ? (
-              <Group x={resizeHandleOverlay.rect.x} y={resizeHandleOverlay.rect.y}>
-                <Rect width={resizeHandleOverlay.rect.width} height={resizeHandleOverlay.rect.height} cornerRadius={3} fill="#ffffff" stroke="#2563eb" strokeWidth={1} />
-                <Line
-                  points={[
-                    resizeHandleOverlay.rect.width * 0.22,
-                    resizeHandleOverlay.rect.height * 0.78,
-                    resizeHandleOverlay.rect.width * 0.78,
-                    resizeHandleOverlay.rect.height * 0.22,
-                    resizeHandleOverlay.rect.width * 0.56,
-                    resizeHandleOverlay.rect.height * 0.22,
-                    resizeHandleOverlay.rect.width * 0.78,
-                    resizeHandleOverlay.rect.height * 0.22,
-                    resizeHandleOverlay.rect.width * 0.78,
-                    resizeHandleOverlay.rect.height * 0.44,
-                  ]}
-                  stroke="#2563eb"
-                  strokeWidth={1}
-                  lineCap="round"
-                  lineJoin="round"
-                />
-              </Group>
-            ) : null}
           </Layer>
         </Stage>
 
@@ -743,7 +731,7 @@ export function DrawingCanvas({ preview, selectedViewId, busy = false, onSelectV
                   top: rect.y,
                   width: rect.width,
                   height: rect.height,
-                  cursor: "pointer",
+                  cursor: navigationMode === "pan" ? "grab" : "pointer",
                   background: "transparent",
                 }}
                 onPointerDown={(event) => {
@@ -755,38 +743,71 @@ export function DrawingCanvas({ preview, selectedViewId, busy = false, onSelectV
               />
             );
           })}
-
-          {resizeHandleOverlay ? (
-            <div
-              data-resize-handle={resizeHandleOverlay.view.id}
-              className="pointer-events-auto absolute"
-              style={{
-                left: resizeHandleOverlay.rect.x,
-                top: resizeHandleOverlay.rect.y,
-                width: resizeHandleOverlay.rect.width,
-                height: resizeHandleOverlay.rect.height,
-                cursor: "nesw-resize",
-                background: "transparent",
-              }}
-              onPointerDown={(event) => {
-                event.stopPropagation();
-                if (busy || event.button !== 0) return;
-                const point = worldPointFromClient(event.clientX, event.clientY, wrapperRef.current, viewBox);
-                if (!point) return;
-                setInteraction({
-                  type: "scale-selection",
-                  viewId: resizeHandleOverlay.view.id,
-                  start: point,
-                  current: point,
-                  initialScale: resizeHandleOverlay.view.scale,
-                });
-              }}
-            />
-          ) : null}
         </div>
       </div>
     </div>
   );
+}
+
+function useSvgTemplateImage(svgSource: string | null) {
+  const [image, setImage] = useState<HTMLImageElement | null>(null);
+  const sanitizedSvgSource = useMemo(() => sanitizeTemplateSvg(svgSource), [svgSource]);
+  const dataUrl = useMemo(
+    () => (sanitizedSvgSource ? `data:image/svg+xml;charset=utf-8,${encodeURIComponent(sanitizedSvgSource)}` : null),
+    [sanitizedSvgSource],
+  );
+
+  useEffect(() => {
+    if (!dataUrl) {
+      setImage(null);
+      return;
+    }
+
+    const nextImage = new window.Image();
+    nextImage.decoding = "async";
+    nextImage.onload = () => setImage(nextImage);
+    nextImage.onerror = () => setImage(null);
+    nextImage.src = dataUrl;
+
+    return () => {
+      nextImage.onload = null;
+      nextImage.onerror = null;
+    };
+  }, [dataUrl]);
+
+  return image;
+}
+
+function sanitizeTemplateSvg(svgSource: string | null) {
+  if (!svgSource?.trim()) {
+    return svgSource;
+  }
+
+  try {
+    const parser = new DOMParser();
+    const document = parser.parseFromString(svgSource, "image/svg+xml");
+
+    if (document.querySelector("parsererror")) {
+      return stripTrimMarks(svgSource);
+    }
+
+    for (const id of ["trimming_marks", "top_left_trimming", "top_right_trimming", "bottom_right_trimming", "bottom_left_trimming"]) {
+      document.querySelector(`[id="${id}"]`)?.remove();
+    }
+
+    return new XMLSerializer().serializeToString(document);
+  } catch {
+    return stripTrimMarks(svgSource);
+  }
+}
+
+function stripTrimMarks(svgSource: string) {
+  let sanitized = svgSource.replace(/<g\b[^>]*\bid=(['"])trimming_marks\1[^>]*>[\s\S]*?<\/g>/gi, "");
+  for (const id of ["top_left_trimming", "top_right_trimming", "bottom_right_trimming", "bottom_left_trimming"]) {
+    sanitized = sanitized.replace(new RegExp(`<[^>]+\\bid=(["'])${id}\\1[^>]*/>`, "gi"), "");
+    sanitized = sanitized.replace(new RegExp(`<[^>]+\\bid=(["'])${id}\\1[^>]*>[\\s\\S]*?<\\/[^>]+>`, "gi"), "");
+  }
+  return sanitized;
 }
 
 function renderSceneItem(item: SceneItem) {
@@ -936,6 +957,30 @@ type Camera = {
   offsetY: number;
 };
 
+function createSheetViewBox(sheet: Sheet): ViewBox {
+  return {
+    x: 0,
+    y: 0,
+    width: sheet.width_mm,
+    height: sheet.height_mm,
+  };
+}
+
+function clampViewBoxToSheet(viewBox: ViewBox, sheet: Sheet): ViewBox {
+  const width = clamp(viewBox.width, 1, sheet.width_mm);
+  const height = clamp(viewBox.height, 1, sheet.height_mm);
+  return {
+    x: clamp(viewBox.x, 0, Math.max(sheet.width_mm - width, 0)),
+    y: clamp(viewBox.y, 0, Math.max(sheet.height_mm - height, 0)),
+    width,
+    height,
+  };
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(Math.max(value, min), max);
+}
+
 function makeCamera(viewBox: ViewBox, viewportSize: { width: number; height: number }): Camera {
   const scaleX = viewportSize.width / viewBox.width;
   const scaleY = viewportSize.height / viewBox.height;
@@ -1074,13 +1119,6 @@ function getDimensionBounds(dimension: PreviewDimension, views: PreviewViewState
 
 function round2(value: number) {
   return Math.round(value * 100) / 100;
-}
-
-function handleScreenSize(viewBox: ViewBox, viewportSize: { width: number; height: number }) {
-  return {
-    width: Math.max((18 / viewBox.width) * viewportSize.width, 8),
-    height: Math.max((18 / viewBox.height) * viewportSize.height, 8),
-  };
 }
 
 function getGridLines(viewBox: ViewBox) {

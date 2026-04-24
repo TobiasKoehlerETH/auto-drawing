@@ -8,6 +8,7 @@ from .exporters import HtmlExportService
 from .importers import StepImportService
 from .projection import ProjectionService
 from .scene import SceneGraphService
+from .techdraw_exact import TechDrawExactService
 
 
 class AutodrawingPipeline:
@@ -17,18 +18,19 @@ class AutodrawingPipeline:
         self.documents = DrawingDocumentService()
         self.scene = SceneGraphService()
         self.html = HtmlExportService()
+        self.techdraw = TechDrawExactService()
 
     def from_step_file(self, path: str | Path, mode: str = "preview") -> PipelineBundle:
         model = self.importer.import_file(path)
-        projection = self.projection.build_projection(model, mode=mode)
-        document = self.documents.create_document(model, projection)
+        projection = self.techdraw.decorate_projection(self.projection.build_projection(model, mode=mode))
+        document = self.techdraw.decorate_document(model, projection, self.documents.create_document(model, projection))
         scene_graph = self.scene.build_scene(document, projection)
         return PipelineBundle(canonical_model=model, projection=projection, document=document, scene_graph=scene_graph)
 
     def from_step_text(self, text: str, source_name: str = "uploaded.step", mode: str = "preview") -> PipelineBundle:
         model = self.importer.import_text(text, source_name=source_name)
-        projection = self.projection.build_projection(model, mode=mode)
-        document = self.documents.create_document(model, projection)
+        projection = self.techdraw.decorate_projection(self.projection.build_projection(model, mode=mode))
+        document = self.techdraw.decorate_document(model, projection, self.documents.create_document(model, projection))
         scene_graph = self.scene.build_scene(document, projection)
         return PipelineBundle(canonical_model=model, projection=projection, document=document, scene_graph=scene_graph)
 
@@ -41,13 +43,14 @@ class AutodrawingPipeline:
         mode: str = "preview",
     ) -> PipelineBundle:
         model = self.importer.import_occt_meshes(meshes, source_name=source_name, units=units)
-        projection = self.projection.build_projection(model, mode=mode)
-        document = self.documents.create_document(model, projection)
+        projection = self.techdraw.decorate_projection(self.projection.build_projection(model, mode=mode))
+        document = self.techdraw.decorate_document(model, projection, self.documents.create_document(model, projection))
         scene_graph = self.scene.build_scene(document, projection)
         return PipelineBundle(canonical_model=model, projection=projection, document=document, scene_graph=scene_graph)
 
     def apply_command(self, bundle: PipelineBundle, command: DrawingCommand) -> PipelineBundle:
         document = self.documents.apply_command(bundle.document, command)
+        document = self.techdraw.decorate_document(bundle.canonical_model, bundle.projection, document)
         scene_graph = self.scene.build_scene(document, bundle.projection)
         return PipelineBundle(
             canonical_model=bundle.canonical_model,
@@ -64,6 +67,7 @@ class AutodrawingPipeline:
 
     def undo(self, bundle: PipelineBundle) -> PipelineBundle:
         document = self.documents.undo_last(bundle.document)
+        document = self.techdraw.decorate_document(bundle.canonical_model, bundle.projection, document)
         scene_graph = self.scene.build_scene(document, bundle.projection)
         return PipelineBundle(
             canonical_model=bundle.canonical_model,
@@ -74,6 +78,7 @@ class AutodrawingPipeline:
 
     def redo(self, bundle: PipelineBundle) -> PipelineBundle:
         document = self.documents.redo_last(bundle.document)
+        document = self.techdraw.decorate_document(bundle.canonical_model, bundle.projection, document)
         scene_graph = self.scene.build_scene(document, bundle.projection)
         return PipelineBundle(
             canonical_model=bundle.canonical_model,
@@ -83,8 +88,11 @@ class AutodrawingPipeline:
         )
 
     def regenerate(self, bundle: PipelineBundle, mode: str | None = None) -> PipelineBundle:
-        projection = self.projection.build_projection(bundle.canonical_model, mode=mode or bundle.projection.mode)
+        projection = self.techdraw.decorate_projection(
+            self.projection.build_projection(bundle.canonical_model, mode=mode or bundle.projection.mode)
+        )
         document = self.documents.regenerate_for_projection(bundle.document, projection, bundle.canonical_model)
+        document = self.techdraw.decorate_document(bundle.canonical_model, projection, document)
         scene_graph = self.scene.build_scene(document, projection)
         return PipelineBundle(
             canonical_model=bundle.canonical_model,
