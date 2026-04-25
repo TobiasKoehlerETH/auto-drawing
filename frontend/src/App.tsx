@@ -68,6 +68,11 @@ const VIEW_SCALE_OPTIONS = [
   { label: "1:4", value: 0.25 },
 ];
 
+const AUTOLOAD_SAMPLES: Record<string, { path: string; label: string }> = {
+  sample: { path: "/sample.STEP", label: "sample.STEP" },
+  cube: { path: "/fixtures/cube.step", label: "cube.step" },
+};
+
 type PreviewViewState = {
   id: string;
   kind: string;
@@ -234,22 +239,23 @@ export default function App() {
     }
 
     const params = new URLSearchParams(window.location.search);
-    const autoload = params.get("autoload");
-    if (autoload !== "sample") {
+    const autoload = params.get("autoload") ?? "";
+    const sample = AUTOLOAD_SAMPLES[autoload];
+    if (!sample) {
       return;
     }
 
     autoloadAttemptedRef.current = true;
     setLoadingModel(true);
-    setStatus("Loading bundled sample.STEP...");
+    setStatus(`Loading bundled ${sample.label}...`);
 
-    void fetch("/sample.STEP")
+    void fetch(sample.path)
       .then(async (response) => {
         if (!response.ok) {
           throw new Error(`Sample load failed (${response.status})`);
         }
         const buffer = await response.arrayBuffer();
-        await createPreview(buffer, "sample.STEP");
+        await createPreview(buffer, sample.label);
       })
       .catch((error: unknown) => {
         setStatus(error instanceof Error ? error.message : "Failed to load bundled sample");

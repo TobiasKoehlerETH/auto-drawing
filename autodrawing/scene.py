@@ -13,6 +13,10 @@ from .standards import PROJECTION_SYMBOL_BOUNDS_MM, TITLE_BLOCK_BOUNDS_MM
 from .view_planner import placed_bounds
 
 
+DIMENSION_TEXT_OFFSET_MM = 3.0
+RADIAL_TEXT_GAP_MM = 3.0
+
+
 class SceneGraphService:
     def build_scene(self, document: DrawingDocument, projection: ProjectionBundle) -> SceneGraph:
         use_exact_template = bool(document.page_template.source_path and document.page_template.svg_source.strip())
@@ -207,6 +211,7 @@ class SceneGraphService:
             extension_start = geometry.get("extension_start", {})
             extension_end = geometry.get("extension_end", {})
             label = geometry.get("label", {"x": dimension.placement.x_mm, "y": dimension.placement.y_mm})
+            label_point = _linear_label_point(label, line_start, line_end)
             return [
                 SceneItem(
                     id=f"{dimension.id}-extension-a",
@@ -252,8 +257,8 @@ class SceneGraphService:
                     id=f"{dimension.id}-text",
                     layer="dimensions",
                     kind="text",
-                    x=float(label.get("x", dimension.placement.x_mm)),
-                    y=float(label.get("y", dimension.placement.y_mm)),
+                    x=label_point["x"],
+                    y=label_point["y"],
                     text=text,
                     classes=["dimension", "dimension-text", "user-locked" if dimension.placement.user_locked else "auto"],
                     meta=meta,
@@ -263,12 +268,13 @@ class SceneGraphService:
         if geometry.get("kind") == "radial":
             anchor = geometry.get("anchor", {})
             label = geometry.get("label", {"x": dimension.placement.x_mm, "y": dimension.placement.y_mm})
+            leader_end = _leader_end_before_label(anchor, label)
             return [
                 SceneItem(
                     id=f"{dimension.id}-leader",
                     layer="dimensions",
                     kind="path",
-                    path_data=_path_from_points(anchor, label),
+                    path_data=_path_from_points(anchor, leader_end),
                     classes=classes + ["leader-line"],
                     meta=meta,
                 ),
@@ -276,7 +282,7 @@ class SceneGraphService:
                     id=f"{dimension.id}-arrow",
                     layer="dimensions",
                     kind="path",
-                    path_data=_arrow_path(anchor, label),
+                    path_data=_arrow_path(anchor, leader_end),
                     classes=classes + ["arrowhead"],
                     meta=meta,
                 ),
@@ -507,6 +513,39 @@ def _path_from_points(start: dict, end: dict) -> str:
     return f"M {float(start.get('x', 0.0)):.2f} {float(start.get('y', 0.0)):.2f} L {float(end.get('x', 0.0)):.2f} {float(end.get('y', 0.0)):.2f}"
 
 
+def _linear_label_point(label: dict, line_start: dict, line_end: dict) -> dict[str, float]:
+    label_x = float(label.get("x", 0.0))
+    label_y = float(label.get("y", 0.0))
+    start_x = float(line_start.get("x", label_x))
+    start_y = float(line_start.get("y", label_y))
+    end_x = float(line_end.get("x", label_x))
+    end_y = float(line_end.get("y", label_y))
+    dx = end_x - start_x
+    dy = end_y - start_y
+    length = max((dx * dx + dy * dy) ** 0.5, 0.001)
+
+    if abs(dy) <= abs(dx) * 0.25:
+        return {"x": label_x, "y": label_y - DIMENSION_TEXT_OFFSET_MM}
+    if abs(dx) <= abs(dy) * 0.25:
+        return {"x": label_x + DIMENSION_TEXT_OFFSET_MM, "y": label_y}
+
+    normal_x = -dy / length
+    normal_y = dx / length
+    return {"x": label_x + normal_x * DIMENSION_TEXT_OFFSET_MM, "y": label_y + normal_y * DIMENSION_TEXT_OFFSET_MM}
+
+
+def _leader_end_before_label(anchor: dict, label: dict) -> dict[str, float]:
+    anchor_x = float(anchor.get("x", 0.0))
+    anchor_y = float(anchor.get("y", 0.0))
+    label_x = float(label.get("x", anchor_x))
+    label_y = float(label.get("y", anchor_y))
+    dx = label_x - anchor_x
+    dy = label_y - anchor_y
+    length = max((dx * dx + dy * dy) ** 0.5, 0.001)
+    gap = min(RADIAL_TEXT_GAP_MM, max(length - 0.1, 0.0))
+    return {"x": label_x - (dx / length) * gap, "y": label_y - (dy / length) * gap}
+
+
 def _arrow_path(tip: dict, tail: dict) -> str:
     tip_x = float(tip.get("x", 0.0))
     tip_y = float(tip.get("y", 0.0))
@@ -519,8 +558,8 @@ def _arrow_path(tip: dict, tail: dict) -> str:
     uy = dy / length
     px = -uy
     py = ux
-    arrow_len = 3.0
-    arrow_width = 1.4
+    arrow_len = 3.5
+    arrow_width = 0.7
     left_x = tip_x + ux * arrow_len + px * arrow_width
     left_y = tip_y + uy * arrow_len + py * arrow_width
     right_x = tip_x + ux * arrow_len - px * arrow_width

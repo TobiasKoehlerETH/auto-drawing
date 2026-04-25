@@ -19,6 +19,7 @@ from .view_planner import placed_bounds
 
 
 DIMENSION_OFFSET_MM = 10.0
+LINEAR_LABEL_OFFSET_MM = 8.0
 RADIAL_LABEL_OFFSET_MM = 9.0
 
 
@@ -34,6 +35,10 @@ class DimensionService:
             geometry = geometry_by_id.get(anchor_view.geometry_id)
             if geometry:
                 dimensions.extend(self._extent_dimensions(anchor_view, geometry))
+
+        thickness_dimension = self._plate_thickness_dimension(document, geometry_by_id, anchor_view)
+        if thickness_dimension:
+            dimensions.append(thickness_dimension)
 
         for view in document.views:
             if view.kind == "isometric":
@@ -66,18 +71,7 @@ class DimensionService:
         updated.placement.y_mm = y_mm
         updated.placement.user_locked = True
         geometry = dict(updated.computed_geometry)
-        kind = geometry.get("kind")
         geometry["label"] = {"x": x_mm, "y": y_mm}
-        if kind == "linear":
-            orientation = geometry.get("orientation")
-            start = geometry.get("extension_start", {})
-            end = geometry.get("extension_end", {})
-            if orientation == "horizontal":
-                geometry["line_start"] = {"x": start.get("x", x_mm), "y": y_mm}
-                geometry["line_end"] = {"x": end.get("x", x_mm), "y": y_mm}
-            elif orientation == "vertical":
-                geometry["line_start"] = {"x": x_mm, "y": start.get("y", y_mm)}
-                geometry["line_end"] = {"x": x_mm, "y": end.get("y", y_mm)}
         updated.computed_geometry = geometry
         return updated
 
@@ -116,7 +110,7 @@ class DimensionService:
             return f"\u2300{formatted}"
         if dimension_type in {"Angle", "Angle3Pt"}:
             return f"{formatted}\u00b0"
-        return f"{formatted} {units}"
+        return formatted
 
     def _anchor_view(self, document: DrawingDocument) -> DrawingView | None:
         anchor_id = document.projection_group.anchor_view_id
@@ -129,17 +123,25 @@ class DimensionService:
         bounds = placed_bounds(view.local_bounds, view.placement)
         horizontal_y = bounds.y_max + DIMENSION_OFFSET_MM
         vertical_x = bounds.x_max + DIMENSION_OFFSET_MM
+        horizontal_start = Point2D(x=bounds.x_min, y=bounds.y_max)
+        horizontal_end = Point2D(x=bounds.x_max, y=bounds.y_max)
+        horizontal_line_start = Point2D(x=bounds.x_min, y=horizontal_y)
+        horizontal_line_end = Point2D(x=bounds.x_max, y=horizontal_y)
+        vertical_start = Point2D(x=bounds.x_max, y=bounds.y_min)
+        vertical_end = Point2D(x=bounds.x_max, y=bounds.y_max)
+        vertical_line_start = Point2D(x=vertical_x, y=bounds.y_min)
+        vertical_line_end = Point2D(x=vertical_x, y=bounds.y_max)
         return [
             self._linear_dimension(
                 view=view,
                 geometry=geometry,
                 dimension_type="DistanceX",
                 value=view.local_bounds.width,
-                placement=AnnotationPlacement(x_mm=(bounds.x_min + bounds.x_max) / 2.0, y_mm=horizontal_y),
-                extension_start=Point2D(x=bounds.x_min, y=bounds.y_max),
-                extension_end=Point2D(x=bounds.x_max, y=bounds.y_max),
-                line_start=Point2D(x=bounds.x_min, y=horizontal_y),
-                line_end=Point2D(x=bounds.x_max, y=horizontal_y),
+                placement=_linear_label_placement("horizontal", horizontal_start, horizontal_end, horizontal_line_start, horizontal_line_end),
+                extension_start=horizontal_start,
+                extension_end=horizontal_end,
+                line_start=horizontal_line_start,
+                line_end=horizontal_line_end,
                 anchor_a_role="min-x",
                 anchor_b_role="max-x",
             ),
@@ -148,11 +150,11 @@ class DimensionService:
                 geometry=geometry,
                 dimension_type="DistanceY",
                 value=view.local_bounds.height,
-                placement=AnnotationPlacement(x_mm=vertical_x, y_mm=(bounds.y_min + bounds.y_max) / 2.0),
-                extension_start=Point2D(x=bounds.x_max, y=bounds.y_min),
-                extension_end=Point2D(x=bounds.x_max, y=bounds.y_max),
-                line_start=Point2D(x=vertical_x, y=bounds.y_min),
-                line_end=Point2D(x=vertical_x, y=bounds.y_max),
+                placement=_linear_label_placement("vertical", vertical_start, vertical_end, vertical_line_start, vertical_line_end),
+                extension_start=vertical_start,
+                extension_end=vertical_end,
+                line_start=vertical_line_start,
+                line_end=vertical_line_end,
                 anchor_a_role="min-y",
                 anchor_b_role="max-y",
             ),
@@ -203,22 +205,35 @@ class DimensionService:
 
     def _diameter_dimensions(self, view: DrawingView, geometry: ProjectedViewGeometry) -> list[DimensionObject]:
         dimensions: list[DimensionObject] = []
+        grouped: dict[float, list[ProjectedCircle]] = {}
         for circle in geometry.circles:
-            dimensions.append(self._circle_dimension(view, circle))
+            grouped.setdefault(round(circle.radius, 3), []).append(circle)
+        for circles in grouped.values():
+            if len(circles) >= 2:
+                dimensions.append(self._circle_dimension(view, sorted(circles, key=lambda item: (item.center.y, item.center.x))[0], count=len(circles), through=True))
+            else:
+                dimensions.append(self._circle_dimension(view, circles[0]))
         return dimensions
 
-    def _circle_dimension(self, view: DrawingView, circle: ProjectedCircle) -> DimensionObject:
+    def _circle_dimension(self, view: DrawingView, circle: ProjectedCircle, *, count: int = 1, through: bool = False) -> DimensionObject:
         center = self._local_to_sheet(circle.center, view)
         radius = circle.radius * view.placement.scale
-        label = Point2D(x=center.x + radius + RADIAL_LABEL_OFFSET_MM, y=center.y - radius - RADIAL_LABEL_OFFSET_MM)
+        if count >= 2:
+            view_bounds = placed_bounds(view.local_bounds, view.placement)
+            label = Point2D(x=max(view_bounds.x_min + 18.0, center.x + radius + RADIAL_LABEL_OFFSET_MM), y=max(view_bounds.y_min - 8.0, 14.0))
+        else:
+            label = Point2D(x=center.x + radius + RADIAL_LABEL_OFFSET_MM, y=center.y - radius - RADIAL_LABEL_OFFSET_MM)
         anchor = Point2D(x=center.x + radius, y=center.y)
         value = circle.radius * 2.0
         dim_id = f"dim-{view.kind}-diameter-{circle.id}-{uuid4().hex[:6]}"
         references = [circle.source_ref.id]
+        formatted_text = self.format_value("Diameter", value)
+        if count >= 2:
+            formatted_text = f"{count}x {formatted_text}" + (" THRU" if through else "")
         return DimensionObject(
             id=dim_id,
             view_id=view.id,
-            label=self.format_value("Diameter", value),
+            label=formatted_text,
             value=value,
             units="mm",
             anchor_a=AnchorRef(view_id=view.id, primitive_id=circle.id, role="center"),
@@ -235,8 +250,47 @@ class DimensionService:
                 "anchor": anchor.model_dump(mode="json"),
                 "label": label.model_dump(mode="json"),
             },
-            formatted_text=self.format_value("Diameter", value),
+            formatted_text=formatted_text,
             format_spec="%.2f",
+        )
+
+    def _plate_thickness_dimension(
+        self,
+        document: DrawingDocument,
+        geometry_by_id: dict[str, ProjectedViewGeometry],
+        anchor_view: DrawingView | None,
+    ) -> DimensionObject | None:
+        if not anchor_view or anchor_view.kind != "top":
+            return None
+        candidates = [
+            view
+            for view in document.views
+            if view.kind == "front" and view.local_bounds.height > 0 and view.local_bounds.height < max(anchor_view.local_bounds.width, anchor_view.local_bounds.height) * 0.35
+        ]
+        if not candidates:
+            return None
+        view = candidates[0]
+        geometry = geometry_by_id.get(view.geometry_id)
+        if not geometry:
+            return None
+        bounds = placed_bounds(view.local_bounds, view.placement)
+        vertical_x = bounds.x_max + DIMENSION_OFFSET_MM
+        extension_start = Point2D(x=bounds.x_max, y=bounds.y_min)
+        extension_end = Point2D(x=bounds.x_max, y=bounds.y_max)
+        line_start = Point2D(x=vertical_x, y=bounds.y_min)
+        line_end = Point2D(x=vertical_x, y=bounds.y_max)
+        return self._linear_dimension(
+            view=view,
+            geometry=geometry,
+            dimension_type="DistanceY",
+            value=view.local_bounds.height,
+            placement=_linear_label_placement("vertical", extension_start, extension_end, line_start, line_end),
+            extension_start=extension_start,
+            extension_end=extension_end,
+            line_start=line_start,
+            line_end=line_end,
+            anchor_a_role="min-y",
+            anchor_b_role="max-y",
         )
 
     def _local_to_sheet(self, point: Point2D, view: DrawingView) -> Point2D:
@@ -255,6 +309,26 @@ def format_angle_from_points(vertex: Point2D, first: Point2D, second: Point2D) -
 
 def distance_between(a: Point2D, b: Point2D) -> float:
     return hypot(a.x - b.x, a.y - b.y)
+
+
+def _linear_label_placement(
+    orientation: str,
+    extension_start: Point2D,
+    extension_end: Point2D,
+    line_start: Point2D,
+    line_end: Point2D,
+) -> AnnotationPlacement:
+    if orientation == "horizontal":
+        direction = 1.0 if (line_start.y + line_end.y) >= (extension_start.y + extension_end.y) else -1.0
+        return AnnotationPlacement(
+            x_mm=(line_start.x + line_end.x) / 2.0,
+            y_mm=(line_start.y + line_end.y) / 2.0 + direction * LINEAR_LABEL_OFFSET_MM,
+        )
+    direction = 1.0 if (line_start.x + line_end.x) >= (extension_start.x + extension_end.x) else -1.0
+    return AnnotationPlacement(
+        x_mm=(line_start.x + line_end.x) / 2.0 + direction * LINEAR_LABEL_OFFSET_MM,
+        y_mm=(line_start.y + line_end.y) / 2.0,
+    )
 
 
 def _point_from_mapping(value: dict) -> Point2D:

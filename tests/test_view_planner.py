@@ -37,15 +37,16 @@ class ViewPlannerTests(unittest.TestCase):
         self.assertLessEqual(bounds.y_max, TITLE_BLOCK_BOUNDS_MM["y"] - DEFAULT_VIEW_GAP_MM / 2.0 + 1e-6)
         self.assertAlmostEqual(bounds.x_max, TITLE_BLOCK_BOUNDS_MM["x"] + TITLE_BLOCK_BOUNDS_MM["width"])
 
-    def test_plate_layout_places_front_below_top(self):
+    def test_plate_layout_keeps_first_angle_front_above_top(self):
         model = StepImportService().import_file("fixtures/step/hole-pattern.step")
         projection = ProjectionService().build_projection(model, mode="final")
 
         placements = plan_view_pack(projection, model, "first-angle")
 
         self.assertEqual(projection.views[0].kind, "top")
-        self.assertGreater(placements["front"].y_mm, placements["top"].y_mm)
-        self.assertLess(placements["right"].x_mm, placements["top"].x_mm)
+        self.assertGreater(placements["top"].y_mm, placements["front"].y_mm)
+        self.assertLess(placements["right"].x_mm, placements["front"].x_mm)
+        self.assertEqual(placements["right"].y_mm, placements["front"].y_mm)
 
 
 if __name__ == "__main__":

@@ -72,25 +72,40 @@ def plan_view_pack(
     scaled_primary_w = primary.bounds.width * scale
     scaled_primary_h = primary.bounds.height * scale
     scaled_right_w = right.bounds.width * scale if right else 0.0
+    scaled_right_h = right.bounds.height * scale if right else 0.0
+    scaled_secondary_w = secondary_vertical.bounds.width * scale if secondary_vertical else 0.0
     scaled_secondary_h = secondary_vertical.bounds.height * scale if secondary_vertical else 0.0
 
-    total_w = scaled_primary_w + (gap + scaled_right_w if right else 0.0)
-    total_h = scaled_primary_h + (gap + scaled_secondary_h if secondary_vertical else 0.0)
+    if projection_type == "first-angle" and primary_kind == "top":
+        orthographic_w = max(scaled_primary_w, scaled_secondary_w)
+        total_w = orthographic_w + (gap + scaled_right_w if right else 0.0)
+        total_h = scaled_secondary_h + gap + scaled_primary_h if secondary_vertical else scaled_primary_h
+    else:
+        total_w = scaled_primary_w + (gap + scaled_right_w if right else 0.0)
+        total_h = scaled_primary_h + (gap + scaled_secondary_h if secondary_vertical else 0.0)
 
     left = MAIN_VIEW_AREA_MM["x"] + max((main_w - total_w) / 2.0, 0.0)
     top_y = MAIN_VIEW_AREA_MM["y"] + max((main_h - total_h) / 2.0, 0.0)
 
     placements: dict[str, ViewPlacement] = {}
 
-    if projection_type == "first-angle":
+    if projection_type == "first-angle" and primary_kind == "top":
+        secondary_vertical_top = top_y
+        primary_top = secondary_vertical_top + scaled_secondary_h + gap if secondary_vertical else top_y
+        primary_left = left + (scaled_right_w + gap if right else 0.0)
+        right_left = left
+        right_top = secondary_vertical_top
+    elif projection_type == "first-angle":
         primary_left = left + (scaled_right_w + gap if right else 0.0)
         primary_top = top_y
         right_left = left
+        right_top = primary_top
         secondary_vertical_top = primary_top + scaled_primary_h + gap
     else:
         primary_left = left
         primary_top = top_y + (scaled_secondary_h + gap if secondary_vertical else 0.0)
         right_left = primary_left + scaled_primary_w + gap
+        right_top = primary_top
         secondary_vertical_top = top_y
 
     primary_bottom = primary_top + scaled_primary_h
@@ -105,7 +120,8 @@ def plan_view_pack(
         )
 
     if right:
-        placements["right"] = ViewPlacement(x_mm=right_left, y_mm=primary_bottom, scale=default_view_scale("right"))
+        right_bottom = right_top + scaled_right_h
+        placements["right"] = ViewPlacement(x_mm=right_left, y_mm=right_bottom, scale=default_view_scale("right"))
 
     if iso:
         iso_scale = default_view_scale("isometric")

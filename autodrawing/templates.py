@@ -12,6 +12,10 @@ from .standards import (
 )
 
 
+def drawing_unit_system(units: str) -> str:
+    return "MMGS" if units.lower() == "mm" else units.upper()
+
+
 def build_default_template(model: CanonicalCadModel) -> tuple[PageTemplateDefinition, list[TitleBlockField]]:
     fields = [
         TitleBlockField(
@@ -28,7 +32,7 @@ def build_default_template(model: CanonicalCadModel) -> tuple[PageTemplateDefini
         TitleBlockField(
             id="tb-units",
             label="Units",
-            value=model.units.upper(),
+            value=drawing_unit_system(model.units),
             placement=AnnotationPlacement(
                 x_mm=TITLE_BLOCK_FIELD_LAYOUT_MM["tb-units"]["x"],
                 y_mm=TITLE_BLOCK_FIELD_LAYOUT_MM["tb-units"]["y"],

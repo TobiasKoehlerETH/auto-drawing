@@ -25,7 +25,7 @@ class HtmlExportService:
     path, rect, circle {{ fill: none; stroke: #111827; stroke-width: 0.35; }}
     .sheet-frame {{ stroke-width: 0.5; }}
     .title-block-grid, .projection-symbol {{ stroke-width: 0.25; }}
-    .hidden {{ stroke-dasharray: 3 2; opacity: 0.72; }}
+    .hidden {{ stroke: #475569; stroke-width: 0.18; stroke-dasharray: 2 1.2; opacity: 0.58; }}
     .centerline {{ stroke-dasharray: 10 3 2 3; }}
     .smooth {{ stroke: #334155; }}
     .dimension-line {{ stroke: #111827; stroke-width: 0.25; }}

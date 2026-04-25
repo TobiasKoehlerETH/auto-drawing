@@ -1,3 +1,4 @@
+from math import hypot
 import unittest
 
 from autodrawing.contracts import DrawingCommand
@@ -8,6 +9,49 @@ class DocumentCommandTests(unittest.TestCase):
     def _bundle(self):
         return AutodrawingPipeline().from_step_file("fixtures/step/hole-pattern.step")
 
+    def _assert_arrowhead_proportions(self, path_data, expected_tip):
+        tokens = path_data.split()
+        self.assertEqual(tokens[0], "M")
+        self.assertEqual(tokens[3], "L")
+        self.assertEqual(tokens[6], "L")
+        self.assertEqual(tokens[9], "Z")
+        tip = (float(tokens[1]), float(tokens[2]))
+        left = (float(tokens[4]), float(tokens[5]))
+        right = (float(tokens[7]), float(tokens[8]))
+        base_midpoint = ((left[0] + right[0]) / 2.0, (left[1] + right[1]) / 2.0)
+
+        self.assertAlmostEqual(tip[0], expected_tip["x"], places=2)
+        self.assertAlmostEqual(tip[1], expected_tip["y"], places=2)
+        self.assertAlmostEqual(hypot(base_midpoint[0] - tip[0], base_midpoint[1] - tip[1]), 3.5, places=2)
+        self.assertAlmostEqual(hypot(left[0] - base_midpoint[0], left[1] - base_midpoint[1]), 0.7, places=2)
+        self.assertAlmostEqual(hypot(right[0] - base_midpoint[0], right[1] - base_midpoint[1]), 0.7, places=2)
+
+    def _path_endpoint(self, path_data):
+        tokens = path_data.split()
+        self.assertEqual(tokens[0], "M")
+        self.assertEqual(tokens[3], "L")
+        return {"x": float(tokens[4]), "y": float(tokens[5])}
+
+    def _assert_linear_label_clears_dimension_line(self, dimension):
+        geometry = dimension.computed_geometry
+        line_start = geometry["line_start"]
+        line_end = geometry["line_end"]
+        label = geometry["label"]
+        orientation = geometry["orientation"]
+
+        if orientation == "horizontal":
+            self.assertGreaterEqual(abs(label["y"] - line_start["y"]), 7.5)
+            return
+        if orientation == "vertical":
+            self.assertGreaterEqual(abs(label["x"] - line_start["x"]), 7.5)
+            return
+
+        dx = line_end["x"] - line_start["x"]
+        dy = line_end["y"] - line_start["y"]
+        length = max(hypot(dx, dy), 0.001)
+        distance = abs(dy * label["x"] - dx * label["y"] + line_end["x"] * line_start["y"] - line_end["y"] * line_start["x"]) / length
+        self.assertGreaterEqual(distance, 7.5)
+
     def test_bundle_starts_with_default_dimensions(self):
         bundle = self._bundle()
         self.assertTrue(bundle.document.dimensions)
@@ -16,6 +60,85 @@ class DocumentCommandTests(unittest.TestCase):
         self.assertIn("DistanceY", dimension_types)
         self.assertIn("Diameter", dimension_types)
         self.assertTrue(bundle.scene_graph.layers["dimensions"])
+
+    def test_dimension_arrowheads_use_narrow_drafting_proportions(self):
+        bundle = self._bundle()
+        dimensions = bundle.document.dimensions
+        scene_items = {item.id: item for item in bundle.scene_graph.layers["dimensions"]}
+
+        linear = next(dimension for dimension in dimensions if dimension.computed_geometry.get("kind") == "linear")
+        linear_arrow = scene_items[f"{linear.id}-arrow-a"]
+        self._assert_arrowhead_proportions(linear_arrow.path_data, linear.computed_geometry["line_start"])
+
+        radial = next(dimension for dimension in dimensions if dimension.computed_geometry.get("kind") == "radial")
+        radial_arrow = scene_items[f"{radial.id}-arrow"]
+        self._assert_arrowhead_proportions(radial_arrow.path_data, radial.computed_geometry["anchor"])
+
+    def test_dimension_text_is_offset_from_dimension_and_leader_lines(self):
+        bundle = self._bundle()
+        scene_items = {item.id: item for item in bundle.scene_graph.layers["dimensions"]}
+
+        horizontal = next(dimension for dimension in bundle.document.dimensions if dimension.dimension_type == "DistanceX")
+        horizontal_text = scene_items[f"{horizontal.id}-text"]
+        horizontal_label = horizontal.computed_geometry["label"]
+        self.assertAlmostEqual(horizontal_text.x, horizontal_label["x"], places=2)
+        self.assertAlmostEqual(horizontal_text.y, horizontal_label["y"] - 3.0, places=2)
+
+        vertical = next(dimension for dimension in bundle.document.dimensions if dimension.dimension_type == "DistanceY")
+        vertical_text = scene_items[f"{vertical.id}-text"]
+        vertical_label = vertical.computed_geometry["label"]
+        self.assertAlmostEqual(vertical_text.x, vertical_label["x"] + 3.0, places=2)
+        self.assertAlmostEqual(vertical_text.y, vertical_label["y"], places=2)
+
+        radial = next(dimension for dimension in bundle.document.dimensions if dimension.computed_geometry.get("kind") == "radial")
+        radial_label = radial.computed_geometry["label"]
+        leader_endpoint = self._path_endpoint(scene_items[f"{radial.id}-leader"].path_data)
+        self.assertGreater(hypot(leader_endpoint["x"] - radial_label["x"], leader_endpoint["y"] - radial_label["y"]), 2.9)
+
+    def test_move_dimension_text_keeps_dimension_line_fixed(self):
+        pipeline = AutodrawingPipeline()
+        bundle = self._bundle()
+        dimension = next(dimension for dimension in bundle.document.dimensions if dimension.computed_geometry.get("kind") == "linear")
+        original_geometry = dimension.computed_geometry
+        next_x = dimension.placement.x_mm + 11
+        next_y = dimension.placement.y_mm - 7
+
+        moved = pipeline.apply_command(
+            bundle,
+            DrawingCommand(
+                id="cmd-move-dim-text",
+                kind="MoveDimensionText",
+                target_id=dimension.id,
+                before={"x_mm": dimension.placement.x_mm, "y_mm": dimension.placement.y_mm},
+                after={"x_mm": next_x, "y_mm": next_y},
+            ),
+        )
+
+        updated = next(candidate for candidate in moved.document.dimensions if candidate.id == dimension.id)
+        self.assertEqual(updated.computed_geometry["line_start"], original_geometry["line_start"])
+        self.assertEqual(updated.computed_geometry["line_end"], original_geometry["line_end"])
+        self.assertEqual(updated.computed_geometry["label"], {"x": next_x, "y": next_y})
+
+    def test_sample_plate_gets_thickness_and_grouped_hole_callout(self):
+        bundle = AutodrawingPipeline().from_step_file("fixtures/step/sample.step", mode="final")
+
+        front = next(view for view in bundle.document.views if view.kind == "front")
+        top = next(view for view in bundle.document.views if view.kind == "top")
+        right = next(view for view in bundle.document.views if view.kind == "right")
+        labels = {dimension.formatted_text for dimension in bundle.document.dimensions}
+
+        self.assertGreater(top.placement.y_mm, front.placement.y_mm)
+        self.assertLess(right.placement.x_mm, front.placement.x_mm)
+        self.assertIn("10", labels)
+        self.assertFalse(any(label and label.endswith(" mm") for label in labels))
+        self.assertTrue(any(label and label.startswith("4x ") and "THRU" in label for label in labels))
+
+        general_tolerances = next(field for field in bundle.document.title_block_fields if field.id == "tb-general_tolerances")
+        self.assertIn("MMGS", general_tolerances.value)
+        self.assertIn("MMGS", bundle.document.page_template.svg_source)
+        for dimension in bundle.document.dimensions:
+            if dimension.computed_geometry.get("kind") == "linear":
+                self._assert_linear_label_clears_dimension_line(dimension)
 
     def test_move_view_and_undo_redo(self):
         pipeline = AutodrawingPipeline()

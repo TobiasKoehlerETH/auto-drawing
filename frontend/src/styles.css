@@ -80,10 +80,11 @@
   }
 
   .drawing-canvas-svg .hidden {
-    stroke: #0f172a;
+    stroke: #475569;
     fill: none;
-    stroke-dasharray: 3 2;
-    opacity: 0.72;
+    stroke-width: 0.18;
+    stroke-dasharray: 2 1.2;
+    opacity: 0.58;
   }
 
   .drawing-canvas-svg .centerline {

@@ -77,11 +77,11 @@ class OcctProjectionAdapter(ProjectionAdapter):
             )
             right = _OrthographicAxes(
                 kind="right",
-                width_axis=self._negate_axis(broad_face.depth_axis),
-                height_axis=broad_face.height_axis,
+                width_axis=self._negate_axis(broad_face.height_axis),
+                height_axis=broad_face.depth_axis,
                 depth_axis=broad_face.width_axis,
-                width=self._axis_size(bbox, broad_face.depth_axis),
-                height=self._axis_size(bbox, broad_face.height_axis),
+                width=self._axis_size(bbox, broad_face.height_axis),
+                height=self._axis_size(bbox, broad_face.depth_axis),
             )
             return {"front": front, "top": top, "right": right}
 
@@ -135,8 +135,9 @@ class OcctProjectionAdapter(ProjectionAdapter):
 
         using_source_edges = bool(model.primary_shape.source_edges)
         source_centerlines: list[ProjectedEdge] = []
+        source_circles: list[ProjectedCircle] = []
         if using_source_edges:
-            bounds, visible_edges, hidden_edges, source_centerlines = self._source_edges_for_orthographic_view(model, axes, mode)
+            bounds, visible_edges, hidden_edges, source_centerlines, source_circles = self._source_edges_for_orthographic_view(model, axes, mode)
             width = max(bounds.width, 1.0)
             height = max(bounds.height, 1.0)
         else:
@@ -154,7 +155,7 @@ class OcctProjectionAdapter(ProjectionAdapter):
             ]
             hidden_edges: list[ProjectedEdge] = []
         smooth_edges: list[ProjectedEdge] = []
-        circles: list[ProjectedCircle] = []
+        circles: list[ProjectedCircle] = source_circles[:]
         arcs: list[ProjectedArc] = []
         centerlines: list[ProjectedEdge] = source_centerlines[:]
 
@@ -307,7 +308,7 @@ class OcctProjectionAdapter(ProjectionAdapter):
 
     def _source_edges_for_orthographic_view(
         self, model: CanonicalCadModel, axes: "_OrthographicAxes", mode: str
-    ) -> tuple[Bounds2D, list[ProjectedEdge], list[ProjectedEdge], list[ProjectedEdge]]:
+    ) -> tuple[Bounds2D, list[ProjectedEdge], list[ProjectedEdge], list[ProjectedEdge], list[ProjectedCircle]]:
         bbox = model.primary_shape.bounding_box
         kind = axes.kind
         view_source = self._view_ref(model, kind)
@@ -330,7 +331,7 @@ class OcctProjectionAdapter(ProjectionAdapter):
             all_points.extend([start_2d, end_2d])
 
         if not all_points:
-            return Bounds2D.from_extents(0.0, 0.0, 1.0, 1.0), [], [], []
+            return Bounds2D.from_extents(0.0, 0.0, 1.0, 1.0), [], [], [], []
 
         raw_bounds = Bounds2D.from_points(all_points)
         visible_by_key: dict[tuple[tuple[float, float], tuple[float, float]], ProjectedEdge] = {}
@@ -393,14 +394,14 @@ class OcctProjectionAdapter(ProjectionAdapter):
                 "visible",
             )
 
-        synthetic_hidden, synthetic_centerlines = self._plate_hole_projection_items(model, axes, raw_bounds)
+        synthetic_hidden, synthetic_centerlines, synthetic_circles = self._plate_hole_projection_items(model, axes, raw_bounds)
         for edge in synthetic_hidden:
             key = self._segment_key(edge.points[0], edge.points[-1])
             if key not in visible_by_key:
                 hidden_by_key[key] = edge
 
         bounds = Bounds2D.from_extents(0.0, 0.0, max(raw_bounds.width, 1.0), max(raw_bounds.height, 1.0))
-        return bounds, list(visible_by_key.values()), list(hidden_by_key.values()), synthetic_centerlines
+        return bounds, list(visible_by_key.values()), list(hidden_by_key.values()), synthetic_centerlines, synthetic_circles
 
     def _source_edges_for_isometric_view(self, model: CanonicalCadModel) -> ProjectedViewGeometry:
         bbox = model.primary_shape.bounding_box
@@ -686,13 +687,14 @@ class OcctProjectionAdapter(ProjectionAdapter):
         model: CanonicalCadModel,
         axes: "_OrthographicAxes",
         raw_bounds: Bounds2D,
-    ) -> tuple[list[ProjectedEdge], list[ProjectedEdge]]:
+    ) -> tuple[list[ProjectedEdge], list[ProjectedEdge], list[ProjectedCircle]]:
         profiles = self._plate_hole_profiles(model)
         if not profiles:
-            return [], []
+            return [], [], []
 
         hidden_edges: list[ProjectedEdge] = []
         centerlines: list[ProjectedEdge] = []
+        circles: list[ProjectedCircle] = []
         view_source = self._view_ref(model, axes.kind)
         width_axis = self._clean_axis(axes.width_axis)
         height_axis = self._clean_axis(axes.height_axis)
@@ -713,6 +715,19 @@ class OcctProjectionAdapter(ProjectionAdapter):
                 radius = min(
                     self._hole_profile_radius(profile, axes.width_axis),
                     self._hole_profile_radius(profile, axes.height_axis),
+                )
+                circles.append(
+                    ProjectedCircle(
+                        id=f"{axes.kind}-hole-{index}-circle",
+                        center=center,
+                        radius=radius,
+                        source_ref=ProjectionSourceRef(
+                            id=f"{axes.kind}-hole-{index}",
+                            shape_id=model.primary_shape.id,
+                            role=f"{axes.kind}-through-hole",
+                            entity_kind="circle",
+                        ),
+                    )
                 )
                 mark = max(radius * 1.45, 3.0)
                 centerlines.extend(
@@ -762,7 +777,7 @@ class OcctProjectionAdapter(ProjectionAdapter):
                             )
                         )
 
-        return hidden_edges, centerlines
+        return hidden_edges, centerlines, circles
 
     def _plate_hole_profiles(self, model: CanonicalCadModel) -> list["_HoleProfile"]:
         if not is_plate_like(model) or not model.primary_shape.source_edges:

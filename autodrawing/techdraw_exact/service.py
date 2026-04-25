@@ -8,6 +8,7 @@ from .model import DrawPage, DrawProjGroup, DrawProjGroupItem, DrawViewPart
 from .runtime import detect_runtime_status
 from .svg_templates import extract_editable_texts, load_svg_template
 from ..contracts import AnnotationPlacement, CanonicalCadModel, DrawingDocument, DrawingView, PageTemplateDefinition, ProjectionBundle, TitleBlockField
+from ..templates import drawing_unit_system
 
 
 class TechDrawExactService:
@@ -113,13 +114,13 @@ class TechDrawExactService:
             "date_of_issue": date.today().isoformat(),
             "document_type": "Component Drawing",
             "drawing_number": model.source_name,
-            "general_tolerances": "ISO 2768-m",
+            "general_tolerances": f"ISO 2768-m / {drawing_unit_system(model.units)}",
             "language_code": "EN",
             "legal_owner_1": "autodrawing",
             "legal_owner_2": "",
             "legal_owner_3": "",
             "legal_owner_4": "",
-            "part_material": model.metadata.get("material", ""),
+            "part_material": model.metadata.get("material", "Not specified"),
             "revision_index": "A",
             "scale": self._format_scale(scale_value),
             "sheet_number": "1 / 1",
@@ -130,6 +131,8 @@ class TechDrawExactService:
             default_value = values.get(editable_name)
             if default_value is None:
                 values[editable_name] = field.value
+                continue
+            if editable_name == "general_tolerances" and field.value == f"ISO 2768-m / {model.units}":
                 continue
             if field.value != default_value:
                 values[editable_name] = field.value

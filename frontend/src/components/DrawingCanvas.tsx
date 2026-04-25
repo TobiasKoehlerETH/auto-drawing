@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { ReactNode } from "react";
+import type { PointerEvent as ReactPointerEvent, ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Check, CircleDot, Diameter, DraftingCompass, Move, Radius, Ruler, ScanSearch, Trash2, Triangle, X, ZoomIn, ZoomOut } from "lucide-react";
 import { Circle, Group, Image as KonvaImage, Layer, Line, Path, Rect, Stage, Text } from "react-konva";
@@ -207,12 +207,22 @@ type ActiveTitleBlockEdit = {
   draft: string;
 };
 
+type ViewRenderTransform = {
+  x: number;
+  y: number;
+  scale: number;
+};
+
 const CANVAS_HEIGHT = 560;
 const CANVAS_HEIGHT_STYLE = "clamp(300px, calc(100vh - 220px), 780px)";
 const TITLE_BLOCK_FONT_FAMILY = "Segoe UI";
 const TITLE_BLOCK_TEXT_GROUP_IDS = ["title_block_labels", "title_block_data_fields"];
 const MIN_ZOOM_BOX_WORLD_SIZE = 1;
 const ZOOM_BOX_PADDING = 1.05;
+const DIMENSION_TEXT_OFFSET_PX = 12;
+const RADIAL_TEXT_GAP_PX = 6;
+const LINEAR_DIMENSION_OFFSET_MM = 10;
+const LINEAR_LABEL_OFFSET_MM = 8;
 
 export function DrawingCanvas({ preview, selectedViewId, busy = false, toolbarPortal, onSelectView, onApplyCommands }: DrawingCanvasProps) {
   const stageRef = useRef<KonvaStage | null>(null);
@@ -222,6 +232,7 @@ export function DrawingCanvas({ preview, selectedViewId, busy = false, toolbarPo
   const sheet = preview.document.sheet;
   const [selectedIds, setSelectedIds] = useState<string[]>(selectedViewId ? [selectedViewId] : []);
   const [hoveredDimensionId, setHoveredDimensionId] = useState<string | null>(null);
+  const [hoveredSketchItemId, setHoveredSketchItemId] = useState<string | null>(null);
   const [hoveredTitleBlockFieldId, setHoveredTitleBlockFieldId] = useState<string | null>(null);
   const [activeTitleBlockEdit, setActiveTitleBlockEdit] = useState<ActiveTitleBlockEdit | null>(null);
   const [savingTitleBlockFieldId, setSavingTitleBlockFieldId] = useState<string | null>(null);
@@ -258,6 +269,7 @@ export function DrawingCanvas({ preview, selectedViewId, busy = false, toolbarPo
     setTitleBlockCommitDrafts({});
     setActiveTitleBlockEdit(null);
     setSavingTitleBlockFieldId(null);
+    setHoveredSketchItemId(null);
   }, [preview.preview_id, sheet.height_mm, sheet.width_mm]);
 
   useEffect(() => {
@@ -282,14 +294,51 @@ export function DrawingCanvas({ preview, selectedViewId, busy = false, toolbarPo
   }, []);
 
   useEffect(() => {
-    if (!selectedViewId) {
-      setSelectedIds([]);
-      return;
-    }
-    if (!selectedIds.includes(selectedViewId)) {
-      setSelectedIds([selectedViewId]);
-    }
-  }, [selectedIds, selectedViewId]);
+    const node = wrapperRef.current;
+    if (!node) return;
+
+    const handleWheel = (event: WheelEvent) => {
+      // Stop the page from scrolling underneath the canvas.
+      event.preventDefault();
+
+      // Normalize delta across deltaMode (pixels / lines / pages).
+      const lineHeightPx = 16;
+      const pageHeightPx = node.clientHeight || 600;
+      const deltaPx =
+        event.deltaMode === 1
+          ? event.deltaY * lineHeightPx
+          : event.deltaMode === 2
+            ? event.deltaY * pageHeightPx
+            : event.deltaY;
+
+      // Smooth exponential zoom; clamp per-event so a fast wheel flick
+      // doesn't jump in huge increments. deltaY > 0 (scroll down) => zoom out.
+      const rawFactor = Math.pow(1.0015, deltaPx);
+      const zoomFactor = Math.min(2, Math.max(0.5, rawFactor));
+
+      const focusPoint = worldPointFromClient(event.clientX, event.clientY, node, viewBox);
+      zoomViewBox(zoomFactor, focusPoint ?? undefined);
+    };
+
+    node.addEventListener("wheel", handleWheel, { passive: false });
+    return () => node.removeEventListener("wheel", handleWheel);
+  }, [viewBox, sheet]);
+
+  useEffect(() => {
+    setSelectedIds((current) => {
+      if (!selectedViewId) {
+        return current.length === 0 ? current : [];
+      }
+      const hasSelectionForView = current.some((id) => {
+        if (id === selectedViewId) return true;
+        return preview.document.dimensions.some((dimension) => dimension.id === id && dimension.view_id === selectedViewId);
+      }) || current.some((id) => sketchItemBelongsToView(id, selectedViewId, sceneLayers));
+      if (hasSelectionForView) {
+        return current;
+      }
+      return [selectedViewId];
+    });
+  }, [preview.document.dimensions, preview.preview_id, sceneLayers, selectedViewId]);
 
   useEffect(() => {
     if (!commitDrafts) return;
@@ -545,6 +594,14 @@ export function DrawingCanvas({ preview, selectedViewId, busy = false, toolbarPo
     [camera, preview.document.page_template.editable_metadata, renderedTitleBlockFields],
   );
 
+  const sketchItemsByView = useMemo(() => {
+    const grouped: Record<string, SceneItem[]> = {};
+    for (const view of renderedViews) {
+      grouped[view.id] = (itemsByView[view.id] ?? []).filter(isSelectableSketchItem);
+    }
+    return grouped;
+  }, [itemsByView, renderedViews]);
+
   const activeTitleBlockField = activeTitleBlockEdit
     ? (renderedTitleBlockFields.find((field) => field.id === activeTitleBlockEdit.fieldId) ?? null)
     : null;
@@ -693,6 +750,24 @@ export function DrawingCanvas({ preview, selectedViewId, busy = false, toolbarPo
     beginDragSelection(nextSelected, point);
   }
 
+  function onSketchItemPointerDown(clientX: number, clientY: number, button: number, item: SceneItem) {
+    if (busy) return;
+    if (shouldStartPan(button)) {
+      startPan(clientX, clientY);
+      return;
+    }
+    if (button !== 0) return;
+    if (navigationMode === "zoom-box") {
+      startZoomBox(clientX, clientY);
+      return;
+    }
+    const viewId = getSceneItemViewId(item);
+    setInteraction(null);
+    setSelectedIds([item.id]);
+    setHoveredSketchItemId(item.id);
+    onSelectView(viewId);
+  }
+
   function onTitleBlockFieldPointerDown(clientX: number, clientY: number, button: number, field: PreviewTitleBlockField) {
     if (busy) return;
     if (shouldStartPan(button)) {
@@ -783,6 +858,21 @@ export function DrawingCanvas({ preview, selectedViewId, busy = false, toolbarPo
       setSelectedIds([]);
     }
   }
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Delete" && event.key !== "Backspace") return;
+      if (busy || activeTitleBlockEdit) return;
+      if (isEditableKeyboardTarget(event.target)) return;
+      if (!selectedIds.some((id) => renderedDimensions.some((dimension) => dimension.id === id))) return;
+
+      event.preventDefault();
+      void deleteSelectedDimensions();
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [activeTitleBlockEdit, busy, renderedDimensions, selectedIds]);
 
   async function onPointerUp() {
     if (!interaction || finishingInteractionRef.current) {
@@ -974,14 +1064,9 @@ export function DrawingCanvas({ preview, selectedViewId, busy = false, toolbarPo
               {globalItems.map((item) => renderSceneItem(item))}
               {renderedViews.map((view) => {
                 const originalView = preview.views.find((candidate) => candidate.id === view.id) ?? view;
-                const originalBounds = originalView.selection_bounds_mm;
-                const dx = view.selection_bounds_mm.x_min - originalBounds.x_min;
-                const dy = view.selection_bounds_mm.y_min - originalBounds.y_min;
-                const scaleFactor = originalView.scale > 0 ? view.scale / originalView.scale : 1;
-                const groupX = dx + originalBounds.x_min * (1 - scaleFactor);
-                const groupY = dy + originalBounds.y_min * (1 - scaleFactor);
+                const transform = getViewRenderTransform(view, originalView);
                 return (
-                  <Group key={view.id} x={groupX} y={groupY} scaleX={scaleFactor} scaleY={scaleFactor}>
+                  <Group key={view.id} x={transform.x} y={transform.y} scaleX={transform.scale} scaleY={transform.scale}>
                     {(itemsByView[view.id] ?? []).map((item) => renderSceneItem(item))}
                   </Group>
                 );
@@ -1083,6 +1168,43 @@ export function DrawingCanvas({ preview, selectedViewId, busy = false, toolbarPo
               />
             );
           })}
+
+          <svg
+            className="pointer-events-none absolute inset-0"
+            width={viewportSize.width}
+            height={viewportSize.height}
+            aria-hidden="true"
+          >
+            <g transform={`matrix(${camera.scaleX} 0 0 ${camera.scaleY} ${camera.offsetX} ${camera.offsetY})`}>
+              {renderedViews.map((view) => {
+                const originalView = preview.views.find((candidate) => candidate.id === view.id) ?? view;
+                const transform = getViewRenderTransform(view, originalView);
+                return (
+                  <g key={`sketch-hit-group-${view.id}`} transform={`translate(${transform.x} ${transform.y}) scale(${transform.scale})`}>
+                    {(sketchItemsByView[view.id] ?? []).map((item) => {
+                      const selected = selectedIds.includes(item.id);
+                      const hovered = hoveredSketchItemId === item.id;
+                      return (
+                        <SketchItemHitTarget
+                          key={`sketch-hit-${item.id}`}
+                          item={item}
+                          hovered={hovered}
+                          selected={selected}
+                          cursor={navigationMode === "zoom-box" ? "crosshair" : navigationMode === "pan" ? "grab" : "pointer"}
+                          onPointerDown={(event) => {
+                            event.stopPropagation();
+                            onSketchItemPointerDown(event.clientX, event.clientY, event.button, item);
+                          }}
+                          onPointerEnter={() => setHoveredSketchItemId(item.id)}
+                          onPointerLeave={() => setHoveredSketchItemId((current) => (current === item.id ? null : current))}
+                        />
+                      );
+                    })}
+                  </g>
+                );
+              })}
+            </g>
+          </svg>
 
           {titleBlockFieldOverlays.map(({ field, rect }) => {
             const active = activeTitleBlockEdit?.fieldId === field.id;
@@ -1343,6 +1465,75 @@ function stripTrimMarks(svgSource: string) {
   return sanitized;
 }
 
+function SketchItemHitTarget({
+  item,
+  hovered,
+  selected,
+  cursor,
+  onPointerDown,
+  onPointerEnter,
+  onPointerLeave,
+}: {
+  item: SceneItem;
+  hovered: boolean;
+  selected: boolean;
+  cursor: string;
+  onPointerDown: (event: ReactPointerEvent<SVGElement>) => void;
+  onPointerEnter: () => void;
+  onPointerLeave: () => void;
+}) {
+  const active = hovered || selected;
+  const highlightStroke = selected ? "#dc2626" : "#2563eb";
+
+  return (
+    <g
+      data-sketch-item-id={item.id}
+      data-sketch-view-id={getSceneItemViewId(item) ?? ""}
+      data-sketch-hovered={hovered ? "true" : "false"}
+      data-sketch-selected={selected ? "true" : "false"}
+    >
+      {active ? renderSvgSketchItem(item, highlightStroke, selected ? 2.8 : 2.3, "none") : null}
+      {renderSvgSketchItem(item, "transparent", 12, "stroke", {
+        cursor,
+        onPointerDown,
+        onPointerEnter,
+        onPointerLeave,
+        "data-sketch-hitbox": item.id,
+      })}
+    </g>
+  );
+}
+
+function renderSvgSketchItem(
+  item: SceneItem,
+  stroke: string,
+  strokeWidth: number,
+  pointerEvents: "none" | "stroke",
+  eventProps: Record<string, unknown> = {},
+) {
+  const commonProps = {
+    stroke,
+    strokeWidth,
+    fill: "none",
+    vectorEffect: "non-scaling-stroke" as const,
+    strokeLinecap: "round" as const,
+    strokeLinejoin: "round" as const,
+    pointerEvents,
+    ...eventProps,
+  };
+
+  if (item.kind === "path") {
+    return <path d={item.path_data ?? ""} {...commonProps} />;
+  }
+  if (item.kind === "rect") {
+    return <rect x={item.x ?? 0} y={item.y ?? 0} width={item.width ?? 0} height={item.height ?? 0} {...commonProps} />;
+  }
+  if (item.kind === "circle") {
+    return <circle cx={item.x ?? 0} cy={item.y ?? 0} r={item.radius ?? 0} {...commonProps} />;
+  }
+  return null;
+}
+
 function renderSceneItem(item: SceneItem) {
   const style = sceneStyle(item.classes);
   if (item.kind === "path") {
@@ -1417,13 +1608,11 @@ function renderDimension(
   const geometry = dimension.computed_geometry ?? {};
   const helperStroke = hovered ? "#60a5fa" : "#64748b";
   const mainStroke = selected ? "#dc2626" : hovered ? "#2563eb" : "#334155";
-  const labelStroke = selected ? "#fca5a5" : hovered ? "#93c5fd" : "#cbd5e1";
-  const labelFill = hovered ? "#eff6ff" : "white";
   const mainStrokeWidth = selected || hovered ? 1.5 : 1;
   const label = geometryPoint(geometry["label"]) ?? { x: dimension.placement.x_mm, y: dimension.placement.y_mm };
   const labelScreen = worldToScreen(label, camera);
   const text = dimension.formatted_text || dimension.label;
-  const labelWidth = Math.max(34 * camera.scaleX, 42);
+  const labelWidth = Math.max(34 * camera.scaleX, 42, text.length * 6.4);
   const labelHeight = Math.max(9 * camera.scaleY, 18);
 
   if (geometry["kind"] === "linear") {
@@ -1436,6 +1625,7 @@ function renderDimension(
       const extEnd = worldToScreen(extensionEnd, camera);
       const a = worldToScreen(lineStart, camera);
       const b = worldToScreen(lineEnd, camera);
+      const labelAnchor = offsetDimensionLabel(labelScreen, a, b);
       return (
         <Group key={dimension.id} listening={false}>
           <Line points={[extStart.x, extStart.y, a.x, a.y]} stroke={helperStroke} dash={[4, 4]} strokeWidth={hovered ? 1.2 : 0.8} />
@@ -1443,7 +1633,7 @@ function renderDimension(
           <Line points={[a.x, a.y, b.x, b.y]} stroke={mainStroke} strokeWidth={mainStrokeWidth} />
           {renderArrowHead(a, b, mainStroke)}
           {renderArrowHead(b, a, mainStroke)}
-          {renderDimensionLabel(labelScreen, labelWidth, labelHeight, text, mainStroke, labelStroke, labelFill)}
+          {renderDimensionLabel(labelAnchor, labelWidth, labelHeight, text, mainStroke)}
         </Group>
       );
     }
@@ -1453,11 +1643,12 @@ function renderDimension(
     const anchor = geometryPoint(geometry["anchor"]);
     if (anchor) {
       const anchorScreen = worldToScreen(anchor, camera);
+      const leaderEnd = leaderEndBeforeLabel(anchorScreen, labelScreen, labelWidth, labelHeight);
       return (
         <Group key={dimension.id} listening={false}>
-          <Line points={[anchorScreen.x, anchorScreen.y, labelScreen.x, labelScreen.y]} stroke={mainStroke} strokeWidth={mainStrokeWidth} />
-          {renderArrowHead(anchorScreen, labelScreen, mainStroke)}
-          {renderDimensionLabel(labelScreen, labelWidth, labelHeight, text, mainStroke, labelStroke, labelFill)}
+          <Line points={[anchorScreen.x, anchorScreen.y, leaderEnd.x, leaderEnd.y]} stroke={mainStroke} strokeWidth={mainStrokeWidth} />
+          {renderArrowHead(anchorScreen, leaderEnd, mainStroke)}
+          {renderDimensionLabel(labelScreen, labelWidth, labelHeight, text, mainStroke)}
         </Group>
       );
     }
@@ -1483,7 +1674,7 @@ function renderDimension(
           <Path data={arcPath} stroke={mainStroke} strokeWidth={mainStrokeWidth} />
           {renderArrowHead(start, end, mainStroke)}
           {renderArrowHead(end, start, mainStroke)}
-          {renderDimensionLabel(labelScreen, labelWidth, labelHeight, text, mainStroke, labelStroke, labelFill)}
+          {renderDimensionLabel(labelScreen, labelWidth, labelHeight, text, mainStroke)}
         </Group>
       );
     }
@@ -1499,6 +1690,7 @@ function renderDimension(
   if (horizontal) {
     const y = worldToScreen({ x: 0, y: dimension.placement.y_mm }, camera).y;
     const midX = (a.x + b.x) / 2;
+    const labelAnchor = offsetDimensionLabel({ x: midX, y }, { x: a.x, y }, { x: b.x, y });
     return (
       <Group key={dimension.id} listening={false}>
         <Line points={[a.x, a.y, a.x, y]} stroke={helperStroke} dash={[4, 4]} strokeWidth={hovered ? 1.2 : 0.8} />
@@ -1506,13 +1698,14 @@ function renderDimension(
         <Line points={[a.x, y, b.x, y]} stroke={mainStroke} strokeWidth={mainStrokeWidth} />
         {renderArrowHead({ x: a.x, y }, { x: b.x, y }, mainStroke)}
         {renderArrowHead({ x: b.x, y }, { x: a.x, y }, mainStroke)}
-        {renderDimensionLabel({ x: midX, y }, labelWidth, labelHeight, text, mainStroke, labelStroke, labelFill)}
+        {renderDimensionLabel(labelAnchor, labelWidth, labelHeight, text, mainStroke)}
       </Group>
     );
   }
 
   const x = worldToScreen({ x: dimension.placement.x_mm, y: 0 }, camera).x;
   const midY = (a.y + b.y) / 2;
+  const labelAnchor = offsetDimensionLabel({ x, y: midY }, { x, y: a.y }, { x, y: b.y });
   return (
     <Group key={dimension.id} listening={false}>
       <Line points={[a.x, a.y, x, a.y]} stroke={helperStroke} dash={[4, 4]} strokeWidth={hovered ? 1.2 : 0.8} />
@@ -1520,7 +1713,7 @@ function renderDimension(
       <Line points={[x, a.y, x, b.y]} stroke={mainStroke} strokeWidth={mainStrokeWidth} />
       {renderArrowHead({ x, y: a.y }, { x, y: b.y }, mainStroke)}
       {renderArrowHead({ x, y: b.y }, { x, y: a.y }, mainStroke)}
-      {renderDimensionLabel({ x, y: midY }, labelWidth, labelHeight, text, mainStroke, labelStroke, labelFill)}
+      {renderDimensionLabel(labelAnchor, labelWidth, labelHeight, text, mainStroke)}
     </Group>
   );
 }
@@ -1533,8 +1726,8 @@ function renderArrowHead(tip: ScreenPoint, tail: ScreenPoint, fill: string) {
   const uy = dy / length;
   const px = -uy;
   const py = ux;
-  const arrowLength = 8;
-  const arrowWidth = 4;
+  const arrowLength = 10;
+  const arrowWidth = 2;
   return (
     <Line
       points={[
@@ -1551,24 +1744,53 @@ function renderArrowHead(tip: ScreenPoint, tail: ScreenPoint, fill: string) {
   );
 }
 
-function renderDimensionLabel(center: ScreenPoint, width: number, height: number, text: string, fill: string, stroke: string, background: string) {
+function renderDimensionLabel(center: ScreenPoint, width: number, height: number, text: string, fill: string) {
   return (
-    <>
-      <Rect x={center.x - width / 2} y={center.y - height / 2} width={width} height={height} cornerRadius={4} fill={background} stroke={stroke} strokeWidth={0.9} />
-      <Text
-        x={center.x - width / 2}
-        y={center.y - height / 2}
-        width={width}
-        height={height}
-        text={text}
-        align="center"
-        verticalAlign="middle"
-        fontSize={Math.max(Math.min(height * 0.52, 13), 10)}
-        fontStyle="bold"
-        fill={fill}
-      />
-    </>
+    <Text
+      x={center.x - width / 2}
+      y={center.y - height / 2}
+      width={width}
+      height={height}
+      text={text}
+      align="center"
+      verticalAlign="middle"
+      fontSize={Math.max(Math.min(height * 0.52, 13), 10)}
+      fontStyle="bold"
+      fill={fill}
+    />
   );
+}
+
+function offsetDimensionLabel(label: ScreenPoint, lineStart: ScreenPoint, lineEnd: ScreenPoint): ScreenPoint {
+  const dx = lineEnd.x - lineStart.x;
+  const dy = lineEnd.y - lineStart.y;
+  const length = Math.max(Math.hypot(dx, dy), 0.001);
+  if (Math.abs(dy) <= Math.abs(dx) * 0.25) {
+    return { x: label.x, y: label.y - DIMENSION_TEXT_OFFSET_PX };
+  }
+  if (Math.abs(dx) <= Math.abs(dy) * 0.25) {
+    return { x: label.x + DIMENSION_TEXT_OFFSET_PX, y: label.y };
+  }
+  return {
+    x: label.x + (-dy / length) * DIMENSION_TEXT_OFFSET_PX,
+    y: label.y + (dx / length) * DIMENSION_TEXT_OFFSET_PX,
+  };
+}
+
+function leaderEndBeforeLabel(anchor: ScreenPoint, label: ScreenPoint, labelWidth: number, labelHeight: number): ScreenPoint {
+  const dx = anchor.x - label.x;
+  const dy = anchor.y - label.y;
+  const length = Math.max(Math.hypot(dx, dy), 0.001);
+  const ux = dx / length;
+  const uy = dy / length;
+  const edgeX = Math.abs(ux) > 0.001 ? labelWidth / 2 / Math.abs(ux) : Number.POSITIVE_INFINITY;
+  const edgeY = Math.abs(uy) > 0.001 ? labelHeight / 2 / Math.abs(uy) : Number.POSITIVE_INFINITY;
+  const edgeDistance = Math.min(edgeX, edgeY);
+  const clearance = Math.min(edgeDistance + RADIAL_TEXT_GAP_PX, Math.max(length - 2, 0));
+  return {
+    x: label.x + ux * clearance,
+    y: label.y + uy * clearance,
+  };
 }
 
 function geometryPoint(value: unknown): Point | null {
@@ -1745,6 +1967,42 @@ function rectsIntersect(a: Marquee, b: Marquee) {
   return a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
 }
 
+function getViewRenderTransform(view: PreviewViewState, originalView: PreviewViewState): ViewRenderTransform {
+  const originalBounds = originalView.selection_bounds_mm;
+  const dx = view.selection_bounds_mm.x_min - originalBounds.x_min;
+  const dy = view.selection_bounds_mm.y_min - originalBounds.y_min;
+  const scale = originalView.scale > 0 ? view.scale / originalView.scale : 1;
+  return {
+    x: dx + originalBounds.x_min * (1 - scale),
+    y: dy + originalBounds.y_min * (1 - scale),
+    scale,
+  };
+}
+
+function isSelectableSketchItem(item: SceneItem) {
+  if (item.kind !== "path" && item.kind !== "rect" && item.kind !== "circle") {
+    return false;
+  }
+  if (!getSceneItemViewId(item)) {
+    return false;
+  }
+  return !item.classes.some((className) => className === "view-isometric-shaded-face" || className === "view-label" || className === "note");
+}
+
+function getSceneItemViewId(item: SceneItem) {
+  return item.group_id ?? (typeof item.meta?.view_id === "string" ? item.meta.view_id : null);
+}
+
+function sketchItemBelongsToView(itemId: string, viewId: string, sceneLayers: Record<string, SceneItem[]>) {
+  const sketchLayers = [
+    ...(sceneLayers.viewGeometryVisible ?? []),
+    ...(sceneLayers.viewGeometryHidden ?? []),
+    ...(sceneLayers.sectionHatch ?? []),
+    ...(sceneLayers.centerlines ?? []),
+  ];
+  return sketchLayers.some((item) => item.id === itemId && getSceneItemViewId(item) === viewId);
+}
+
 function getViewDragTargetIds(activeView: PreviewViewState, selectedIds: string[], views: PreviewViewState[]) {
   const targetIds = new Set(selectedIds);
   const primaryViewId = findPrimaryViewId(views);
@@ -1810,6 +2068,14 @@ function sameStringRecord(left: Record<string, string>, right: Record<string, st
     return false;
   }
   return rightKeys.every((key) => left[key] === right[key]);
+}
+
+function isEditableKeyboardTarget(target: EventTarget | null) {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+  const tagName = target.tagName.toLowerCase();
+  return tagName === "input" || tagName === "textarea" || tagName === "select" || target.isContentEditable;
 }
 
 function previewMatchesCommitDrafts(preview: DrawingPreview, commitDrafts: CommitDrafts) {
@@ -1956,19 +2222,6 @@ function getComputedDimensionBounds(dimension: PreviewDimension): Marquee | null
 function withDimensionPlacement(dimension: PreviewDimension, x_mm: number, y_mm: number): PreviewDimension {
   const computed = { ...(dimension.computed_geometry ?? {}) };
   computed["label"] = { x: x_mm, y: y_mm };
-  if (computed["kind"] === "linear") {
-    const extensionStart = geometryPoint(computed["extension_start"]);
-    const extensionEnd = geometryPoint(computed["extension_end"]);
-    if (extensionStart && extensionEnd) {
-      if (computed["orientation"] === "horizontal") {
-        computed["line_start"] = { x: extensionStart.x, y: y_mm };
-        computed["line_end"] = { x: extensionEnd.x, y: y_mm };
-      } else {
-        computed["line_start"] = { x: x_mm, y: extensionStart.y };
-        computed["line_end"] = { x: x_mm, y: extensionEnd.y };
-      }
-    }
-  }
   return {
     ...dimension,
     placement: { ...dimension.placement, x_mm, y_mm },
@@ -2011,6 +2264,41 @@ function translateDimensionGeometry(value: unknown, dx_mm: number, dy_mm: number
   return translated;
 }
 
+function linearLabelPlacement(orientation: string, extensionStart: Point, extensionEnd: Point, lineStart: Point, lineEnd: Point): Point {
+  if (orientation === "horizontal") {
+    const direction = lineStart.y + lineEnd.y >= extensionStart.y + extensionEnd.y ? 1 : -1;
+    return {
+      x: (lineStart.x + lineEnd.x) / 2,
+      y: (lineStart.y + lineEnd.y) / 2 + direction * LINEAR_LABEL_OFFSET_MM,
+    };
+  }
+  if (orientation === "vertical") {
+    const direction = lineStart.x + lineEnd.x >= extensionStart.x + extensionEnd.x ? 1 : -1;
+    return {
+      x: (lineStart.x + lineEnd.x) / 2 + direction * LINEAR_LABEL_OFFSET_MM,
+      y: (lineStart.y + lineEnd.y) / 2,
+    };
+  }
+
+  const dx = lineEnd.x - lineStart.x;
+  const dy = lineEnd.y - lineStart.y;
+  const length = Math.max(Math.hypot(dx, dy), 0.001);
+  return {
+    x: (lineStart.x + lineEnd.x) / 2 + (-dy / length) * LINEAR_LABEL_OFFSET_MM,
+    y: (lineStart.y + lineEnd.y) / 2 + (dx / length) * LINEAR_LABEL_OFFSET_MM,
+  };
+}
+
+function offsetLinePoint(point: Point, lineStart: Point, lineEnd: Point, offset: number): Point {
+  const dx = lineEnd.x - lineStart.x;
+  const dy = lineEnd.y - lineStart.y;
+  const length = Math.max(Math.hypot(dx, dy), 0.001);
+  return {
+    x: point.x + (-dy / length) * offset,
+    y: point.y + (dx / length) * offset,
+  };
+}
+
 function buildDimensionFromTool(tool: DimensionTool, view: PreviewViewState, sceneLayers: Record<string, SceneItem[]>): PreviewDimension | null {
   const bounds = view.selection_bounds_mm;
   const scale = view.scale || 1;
@@ -2030,21 +2318,18 @@ function buildDimensionFromTool(tool: DimensionTool, view: PreviewViewState, sce
       : vertical
         ? { x: bounds.x_max, y: bounds.y_max }
         : { x: bounds.x_max, y: bounds.y_min };
-    const label = horizontal
-      ? { x: (bounds.x_min + bounds.x_max) / 2, y: bounds.y_max + 10 }
-      : vertical
-        ? { x: bounds.x_max + 10, y: (bounds.y_min + bounds.y_max) / 2 }
-        : { x: (bounds.x_min + bounds.x_max) / 2 + 8, y: (bounds.y_min + bounds.y_max) / 2 + 8 };
     const lineStart = horizontal
-      ? { x: extensionStart.x, y: label.y }
+      ? { x: extensionStart.x, y: bounds.y_max + LINEAR_DIMENSION_OFFSET_MM }
       : vertical
-        ? { x: label.x, y: extensionStart.y }
-        : extensionStart;
+        ? { x: bounds.x_max + LINEAR_DIMENSION_OFFSET_MM, y: extensionStart.y }
+        : offsetLinePoint(extensionStart, extensionStart, extensionEnd, LINEAR_DIMENSION_OFFSET_MM);
     const lineEnd = horizontal
-      ? { x: extensionEnd.x, y: label.y }
+      ? { x: extensionEnd.x, y: bounds.y_max + LINEAR_DIMENSION_OFFSET_MM }
       : vertical
-        ? { x: label.x, y: extensionEnd.y }
-        : extensionEnd;
+        ? { x: bounds.x_max + LINEAR_DIMENSION_OFFSET_MM, y: extensionEnd.y }
+        : offsetLinePoint(extensionEnd, extensionStart, extensionEnd, LINEAR_DIMENSION_OFFSET_MM);
+    const orientation = horizontal ? "horizontal" : vertical ? "vertical" : "aligned";
+    const label = linearLabelPlacement(orientation, extensionStart, extensionEnd, lineStart, lineEnd);
     const value = horizontal
       ? (bounds.x_max - bounds.x_min) / scale
       : vertical
@@ -2067,7 +2352,7 @@ function buildDimensionFromTool(tool: DimensionTool, view: PreviewViewState, sce
       placement: { x_mm: label.x, y_mm: label.y },
       computed_geometry: {
         kind: "linear",
-        orientation: horizontal ? "horizontal" : vertical ? "vertical" : "aligned",
+        orientation,
         extension_start: extensionStart,
         extension_end: extensionEnd,
         line_start: lineStart,
@@ -2146,7 +2431,7 @@ function formatDimensionText(type: DimensionType, value: number) {
   if (type === "Radius") return `R${formatted}`;
   if (type === "Diameter") return `\u2300${formatted}`;
   if (type === "Angle" || type === "Angle3Pt") return `${formatted}\u00b0`;
-  return `${formatted} mm`;
+  return formatted;
 }
 
 function angleFromPoints(vertex: Point, first: Point, second: Point) {
@@ -2178,8 +2463,10 @@ function sceneStyle(classes: string[]) {
   let dash: number[] | undefined;
 
   if (has("hidden")) {
-    dash = [3, 2];
-    opacity = 0.72;
+    stroke = "#475569";
+    strokeWidth = 0.32;
+    dash = [2, 1.25];
+    opacity = 0.58;
   }
 
   if (has("centerline")) {

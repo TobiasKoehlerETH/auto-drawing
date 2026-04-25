@@ -24,7 +24,7 @@ try {
   await waitForIdle(page);
 
   let previewId = await readPreviewId(page);
-  await uploadFixture(page, path.resolve(process.cwd(), "public", "fixtures", "cube-30.step"));
+  await uploadFixture(page, path.resolve(process.cwd(), "public", "fixtures", "cube.step"));
   await waitForIdle(page);
   await waitForPreviewIdChange(page, previewId);
   await waitForCanvasSelector(page, "[data-hitbox-for='view-front']", 45000);
@@ -48,6 +48,8 @@ try {
   assertMoved(rightInitial, rightMoved, "view-right", "x");
   assertUnchanged(rightInitial, rightMoved, "view-right", "y");
 
+  const keyboardDeleteResult = await verifyKeyboardDimensionDelete(page);
+
   previewId = await readPreviewId(page);
   await uploadFixture(page, path.resolve(process.cwd(), "public", "fixtures", "hole-pattern.step"));
   await waitForIdle(page);
@@ -58,7 +60,7 @@ try {
   await dragHitbox(page, "view-front", 80, 70);
   await waitForIdle(page);
   const frontMoved = await waitForViewPositionChange(page, plateInitial, "view-front", "y");
-  assertUnchanged(plateInitial, frontMoved, "view-front", "x");
+  assertMoved(plateInitial, frontMoved, "view-front", "x");
   assertMoved(plateInitial, frontMoved, "view-front", "y");
 
   await page.screenshot({ path: screenshotPath, fullPage: true });
@@ -70,6 +72,7 @@ try {
         cubeInitial,
         cubeMoved,
         rightMoved,
+        keyboardDeleteResult,
         plateInitial,
         frontMoved,
       },
@@ -99,6 +102,47 @@ async function dragHitbox(page, targetId, deltaX, deltaY) {
   await page.mouse.down();
   await page.mouse.move(point.x + deltaX, point.y + deltaY, { steps: 18 });
   await page.mouse.up();
+}
+
+async function verifyKeyboardDimensionDelete(page) {
+  const beforeIds = await readDimensionIds(page);
+  await page.click('[aria-label="Horizontal dimension"]');
+  await page.waitForFunction(
+    (previousCount) => document.querySelectorAll("[data-dimension-id]").length > previousCount,
+    { timeout: 15000 },
+    beforeIds.length,
+  );
+
+  const afterCreateIds = await readDimensionIds(page);
+  const createdId = afterCreateIds.find((id) => !beforeIds.includes(id));
+  if (!createdId) {
+    throw new Error(`No created dimension id found: ${JSON.stringify({ beforeIds, afterCreateIds })}`);
+  }
+
+  await clickCenter(page, `[data-dimension-id='${createdId}']`);
+  await page.keyboard.press("Delete");
+  await page.waitForFunction(
+    (expectedIds) => {
+      const currentIds = Array.from(document.querySelectorAll("[data-dimension-id]")).map((node) => node.getAttribute("data-dimension-id"));
+      return currentIds.length === expectedIds.length && expectedIds.every((id) => currentIds.includes(id));
+    },
+    { timeout: 15000 },
+    beforeIds,
+  );
+
+  return { beforeIds, createdId, afterDeleteIds: await readDimensionIds(page) };
+}
+
+async function readDimensionIds(page) {
+  return page.$$eval("[data-dimension-id]", (nodes) => nodes.map((node) => node.getAttribute("data-dimension-id")).filter(Boolean));
+}
+
+async function clickCenter(page, selector) {
+  const point = await page.$eval(selector, (node) => {
+    const rect = node.getBoundingClientRect();
+    return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+  });
+  await page.mouse.click(point.x, point.y);
 }
 
 async function waitForCanvasSelector(page, selector, timeout = 15000) {

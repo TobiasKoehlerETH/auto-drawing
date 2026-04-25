@@ -37,7 +37,7 @@ try {
     } else {
       await page.goto(`${appUrl}/?qa=${capture.name}`, { waitUntil: "networkidle2" });
       if (capture.mode === "upload") {
-        await uploadFixture(page, path.resolve(process.cwd(), "public", "fixtures", "cube-30.step"));
+        await uploadFixture(page, path.resolve(process.cwd(), "public", "fixtures", "cube.step"));
         await waitForPreview(page);
       } else {
         await waitForIdle(page);
