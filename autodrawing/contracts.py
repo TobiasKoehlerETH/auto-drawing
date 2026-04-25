@@ -24,15 +24,20 @@ LayerName = Literal[
     "selectionOverlay",
 ]
 CommandKind = Literal[
+    "CreateDimension",
+    "DeleteDimension",
     "MoveDimensionText",
     "MoveNote",
     "MoveView",
+    "SetDimensionFormat",
+    "SetDimensionMeasurementType",
     "SetTitleBlockField",
     "ReorderBomRow",
     "ChangeViewScale",
     "SetDisplayTransform",
 ]
 PrimitiveKind = Literal["rect", "circle", "text", "path"]
+DimensionType = Literal["Distance", "DistanceX", "DistanceY", "Radius", "Diameter", "Angle", "Angle3Pt"]
 
 
 class Point2D(BaseModel):
@@ -319,9 +324,14 @@ class DimensionObject(BaseModel):
     anchor_a: AnchorRef
     anchor_b: AnchorRef
     placement: AnnotationPlacement
+    dimension_type: DimensionType = "Distance"
     style_profile: Literal["iso"] = "iso"
-    measurement_type: Literal["True", "Projected"] | None = None
+    measurement_type: Literal["True", "Projected"] = "Projected"
     references: list[str] = Field(default_factory=list)
+    references_2d: list[str] = Field(default_factory=list)
+    references_3d: list[str] = Field(default_factory=list)
+    computed_geometry: dict[str, Any] = Field(default_factory=dict)
+    formatted_text: str | None = None
     format_spec: str | None = None
 
 

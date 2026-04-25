@@ -28,7 +28,11 @@ class HtmlExportService:
     .hidden {{ stroke-dasharray: 3 2; opacity: 0.72; }}
     .centerline {{ stroke-dasharray: 10 3 2 3; }}
     .smooth {{ stroke: #334155; }}
-    .dimension, .note, .view-label, .title-block-field {{ font-size: 4px; fill: #0f172a; stroke: none; }}
+    .dimension-line {{ stroke: #111827; stroke-width: 0.25; }}
+    .extension-line {{ stroke-width: 0.18; }}
+    .leader-line {{ stroke-width: 0.25; }}
+    .arrowhead {{ fill: #111827; stroke: #111827; stroke-width: 0.18; }}
+    .dimension-text, .note, .view-label, .title-block-field {{ font-size: 4px; fill: #0f172a; stroke: none; }}
     .view-label {{ font-weight: 600; letter-spacing: 0.02em; }}
   </style>
 </head>

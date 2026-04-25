@@ -8,9 +8,14 @@ class DocumentCommandTests(unittest.TestCase):
     def _bundle(self):
         return AutodrawingPipeline().from_step_file("fixtures/step/hole-pattern.step")
 
-    def test_bundle_starts_without_default_dimensions(self):
+    def test_bundle_starts_with_default_dimensions(self):
         bundle = self._bundle()
-        self.assertFalse(bundle.document.dimensions)
+        self.assertTrue(bundle.document.dimensions)
+        dimension_types = {dimension.dimension_type for dimension in bundle.document.dimensions}
+        self.assertIn("DistanceX", dimension_types)
+        self.assertIn("DistanceY", dimension_types)
+        self.assertIn("Diameter", dimension_types)
+        self.assertTrue(bundle.scene_graph.layers["dimensions"])
 
     def test_move_view_and_undo_redo(self):
         pipeline = AutodrawingPipeline()
@@ -31,6 +36,66 @@ class DocumentCommandTests(unittest.TestCase):
         undone = pipeline.undo(moved)
         self.assertEqual(undone.document.views[0].placement.x_mm, original.placement.x_mm)
         self.assertEqual(undone.document.views[0].placement.y_mm, original.placement.y_mm)
+
+    def test_move_view_translates_linked_dimensions_and_undo_redo(self):
+        pipeline = AutodrawingPipeline()
+        bundle = self._bundle()
+        linked_view_id = bundle.document.dimensions[0].view_id
+        linked_view = next(view for view in bundle.document.views if view.id == linked_view_id)
+        linked_before = [dimension for dimension in bundle.document.dimensions if dimension.view_id == linked_view.id]
+        self.assertTrue(linked_before)
+
+        before_positions = {
+            dimension.id: (
+                dimension.placement.x_mm,
+                dimension.placement.y_mm,
+                dict(dimension.computed_geometry.get("label", {})),
+            )
+            for dimension in linked_before
+        }
+
+        moved = pipeline.apply_command(
+            bundle,
+            DrawingCommand(
+                id="cmd-move-front-linked-dims",
+                kind="MoveView",
+                target_id=linked_view.id,
+                before={"x_mm": linked_view.placement.x_mm, "y_mm": linked_view.placement.y_mm},
+                after={"x_mm": linked_view.placement.x_mm + 12, "y_mm": linked_view.placement.y_mm + 6},
+            ),
+        )
+
+        for dimension in moved.document.dimensions:
+            if dimension.view_id != linked_view.id:
+                continue
+            before_x, before_y, before_label = before_positions[dimension.id]
+            self.assertEqual(dimension.placement.x_mm, before_x + 12)
+            self.assertEqual(dimension.placement.y_mm, before_y + 6)
+            if before_label:
+                self.assertEqual(dimension.computed_geometry.get("label", {}).get("x"), before_label.get("x", 0) + 12)
+                self.assertEqual(dimension.computed_geometry.get("label", {}).get("y"), before_label.get("y", 0) + 6)
+
+        undone = pipeline.undo(moved)
+        for dimension in undone.document.dimensions:
+            if dimension.view_id != linked_view.id:
+                continue
+            before_x, before_y, before_label = before_positions[dimension.id]
+            self.assertEqual(dimension.placement.x_mm, before_x)
+            self.assertEqual(dimension.placement.y_mm, before_y)
+            if before_label:
+                self.assertEqual(dimension.computed_geometry.get("label", {}).get("x"), before_label.get("x", 0))
+                self.assertEqual(dimension.computed_geometry.get("label", {}).get("y"), before_label.get("y", 0))
+
+        redone = pipeline.redo(undone)
+        for dimension in redone.document.dimensions:
+            if dimension.view_id != linked_view.id:
+                continue
+            before_x, before_y, before_label = before_positions[dimension.id]
+            self.assertEqual(dimension.placement.x_mm, before_x + 12)
+            self.assertEqual(dimension.placement.y_mm, before_y + 6)
+            if before_label:
+                self.assertEqual(dimension.computed_geometry.get("label", {}).get("x"), before_label.get("x", 0) + 12)
+                self.assertEqual(dimension.computed_geometry.get("label", {}).get("y"), before_label.get("y", 0) + 6)
 
     def test_reorder_bom_updates_item_numbers(self):
         pipeline = AutodrawingPipeline()
@@ -86,6 +151,85 @@ class DocumentCommandTests(unittest.TestCase):
 
         redone = pipeline.redo(undone)
         self.assertEqual(redone.document.display_transforms[target_id], "translate(12 8) scale(1.25 1.25)")
+
+    def test_dimension_commands_create_delete_format_measurement_and_undo(self):
+        pipeline = AutodrawingPipeline()
+        bundle = self._bundle()
+        target_view = bundle.document.views[0]
+        dimension_payload = {
+            "id": "dim-angle-manual",
+            "view_id": target_view.id,
+            "label": "90 deg",
+            "value": 0,
+            "units": "mm",
+            "anchor_a": {"view_id": target_view.id, "primitive_id": target_view.geometry_id, "role": "angle-a"},
+            "anchor_b": {"view_id": target_view.id, "primitive_id": target_view.geometry_id, "role": "angle-b"},
+            "placement": {"x_mm": target_view.placement.x_mm + 20, "y_mm": target_view.placement.y_mm + 20},
+            "dimension_type": "Angle3Pt",
+            "measurement_type": "Projected",
+            "references_2d": [target_view.geometry_id],
+            "computed_geometry": {
+                "kind": "angular",
+                "vertex": {"x": 0, "y": 0},
+                "first": {"x": 10, "y": 0},
+                "second": {"x": 0, "y": 10},
+                "label": {"x": target_view.placement.x_mm + 20, "y": target_view.placement.y_mm + 20},
+            },
+        }
+
+        created = pipeline.apply_command(
+            bundle,
+            DrawingCommand(
+                id="cmd-create-dim",
+                kind="CreateDimension",
+                target_id="dim-angle-manual",
+                before={},
+                after={"dimension": dimension_payload},
+            ),
+        )
+        manual = next(dimension for dimension in created.document.dimensions if dimension.id == "dim-angle-manual")
+        self.assertEqual(manual.dimension_type, "Angle3Pt")
+        self.assertAlmostEqual(manual.value, 90.0)
+        self.assertEqual(manual.formatted_text, "90\u00b0")
+
+        formatted = pipeline.apply_command(
+            created,
+            DrawingCommand(
+                id="cmd-format-dim",
+                kind="SetDimensionFormat",
+                target_id=manual.id,
+                before={"format_spec": manual.format_spec},
+                after={"format_spec": "%.1f"},
+            ),
+        )
+        self.assertEqual(next(d for d in formatted.document.dimensions if d.id == manual.id).formatted_text, "90\u00b0")
+
+        measured = pipeline.apply_command(
+            formatted,
+            DrawingCommand(
+                id="cmd-measure-dim",
+                kind="SetDimensionMeasurementType",
+                target_id=manual.id,
+                before={"measurement_type": "Projected"},
+                after={"measurement_type": "True"},
+            ),
+        )
+        self.assertEqual(next(d for d in measured.document.dimensions if d.id == manual.id).measurement_type, "True")
+
+        deleted = pipeline.apply_command(
+            measured,
+            DrawingCommand(
+                id="cmd-delete-dim",
+                kind="DeleteDimension",
+                target_id=manual.id,
+                before={"dimension": manual.model_dump(mode="json")},
+                after={},
+            ),
+        )
+        self.assertFalse(any(dimension.id == manual.id for dimension in deleted.document.dimensions))
+
+        restored = pipeline.undo(deleted)
+        self.assertTrue(any(dimension.id == manual.id for dimension in restored.document.dimensions))
 
     def test_set_title_block_field_updates_exact_template_and_undo_redo(self):
         pipeline = AutodrawingPipeline()

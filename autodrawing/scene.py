@@ -191,20 +191,119 @@ class SceneGraphService:
             )
 
         for dimension in document.dimensions:
-            layers["dimensions"].append(
-                SceneItem(
-                    id=dimension.id,
-                    layer="dimensions",
-                    kind="text",
-                    x=dimension.placement.x_mm,
-                    y=dimension.placement.y_mm,
-                    text=f"{dimension.label}: {dimension.value:g} {dimension.units}",
-                    classes=["dimension", "user-locked" if dimension.placement.user_locked else "auto"],
-                    meta={"target_id": dimension.id, "view_id": dimension.view_id},
-                )
-            )
+            layers["dimensions"].extend(self._dimension_items(dimension))
 
         return SceneGraph(schema_version="1.0", width_mm=document.sheet.width_mm, height_mm=document.sheet.height_mm, layers=layers)
+
+    def _dimension_items(self, dimension) -> list[SceneItem]:
+        geometry = dimension.computed_geometry or {}
+        text = dimension.formatted_text or dimension.label
+        classes = ["dimension", "dimension-line", dimension.dimension_type.lower()]
+        meta = {"target_id": dimension.id, "view_id": dimension.view_id, "dimension_type": dimension.dimension_type}
+
+        if geometry.get("kind") == "linear":
+            line_start = geometry.get("line_start", {})
+            line_end = geometry.get("line_end", {})
+            extension_start = geometry.get("extension_start", {})
+            extension_end = geometry.get("extension_end", {})
+            label = geometry.get("label", {"x": dimension.placement.x_mm, "y": dimension.placement.y_mm})
+            return [
+                SceneItem(
+                    id=f"{dimension.id}-extension-a",
+                    layer="dimensions",
+                    kind="path",
+                    path_data=_path_from_points(extension_start, line_start),
+                    classes=classes + ["extension-line"],
+                    meta=meta,
+                ),
+                SceneItem(
+                    id=f"{dimension.id}-extension-b",
+                    layer="dimensions",
+                    kind="path",
+                    path_data=_path_from_points(extension_end, line_end),
+                    classes=classes + ["extension-line"],
+                    meta=meta,
+                ),
+                SceneItem(
+                    id=f"{dimension.id}-line",
+                    layer="dimensions",
+                    kind="path",
+                    path_data=_path_from_points(line_start, line_end),
+                    classes=classes,
+                    meta=meta,
+                ),
+                SceneItem(
+                    id=f"{dimension.id}-arrow-a",
+                    layer="dimensions",
+                    kind="path",
+                    path_data=_arrow_path(line_start, line_end),
+                    classes=classes + ["arrowhead"],
+                    meta=meta,
+                ),
+                SceneItem(
+                    id=f"{dimension.id}-arrow-b",
+                    layer="dimensions",
+                    kind="path",
+                    path_data=_arrow_path(line_end, line_start),
+                    classes=classes + ["arrowhead"],
+                    meta=meta,
+                ),
+                SceneItem(
+                    id=f"{dimension.id}-text",
+                    layer="dimensions",
+                    kind="text",
+                    x=float(label.get("x", dimension.placement.x_mm)),
+                    y=float(label.get("y", dimension.placement.y_mm)),
+                    text=text,
+                    classes=["dimension", "dimension-text", "user-locked" if dimension.placement.user_locked else "auto"],
+                    meta=meta,
+                ),
+            ]
+
+        if geometry.get("kind") == "radial":
+            anchor = geometry.get("anchor", {})
+            label = geometry.get("label", {"x": dimension.placement.x_mm, "y": dimension.placement.y_mm})
+            return [
+                SceneItem(
+                    id=f"{dimension.id}-leader",
+                    layer="dimensions",
+                    kind="path",
+                    path_data=_path_from_points(anchor, label),
+                    classes=classes + ["leader-line"],
+                    meta=meta,
+                ),
+                SceneItem(
+                    id=f"{dimension.id}-arrow",
+                    layer="dimensions",
+                    kind="path",
+                    path_data=_arrow_path(anchor, label),
+                    classes=classes + ["arrowhead"],
+                    meta=meta,
+                ),
+                SceneItem(
+                    id=f"{dimension.id}-text",
+                    layer="dimensions",
+                    kind="text",
+                    x=float(label.get("x", dimension.placement.x_mm)),
+                    y=float(label.get("y", dimension.placement.y_mm)),
+                    text=text,
+                    classes=["dimension", "dimension-text", "user-locked" if dimension.placement.user_locked else "auto"],
+                    meta=meta,
+                ),
+            ]
+
+        return [
+            SceneItem(
+                id=f"{dimension.id}-text",
+                layer="dimensions",
+                kind="text",
+                x=dimension.placement.x_mm,
+                y=dimension.placement.y_mm,
+                text=text,
+                classes=["dimension", "dimension-text"],
+                meta=meta,
+            )
+        ]
 
     def _template_items(self) -> list[SceneItem]:
         items = [
@@ -402,3 +501,28 @@ def _format_scale_text(scale: float) -> str:
     if rounded < 1:
         return f"Scale 1 : {round(1 / rounded, 2):g}"
     return f"Scale {rounded:g} : 1"
+
+
+def _path_from_points(start: dict, end: dict) -> str:
+    return f"M {float(start.get('x', 0.0)):.2f} {float(start.get('y', 0.0)):.2f} L {float(end.get('x', 0.0)):.2f} {float(end.get('y', 0.0)):.2f}"
+
+
+def _arrow_path(tip: dict, tail: dict) -> str:
+    tip_x = float(tip.get("x", 0.0))
+    tip_y = float(tip.get("y", 0.0))
+    tail_x = float(tail.get("x", tip_x))
+    tail_y = float(tail.get("y", tip_y))
+    dx = tail_x - tip_x
+    dy = tail_y - tip_y
+    length = max((dx * dx + dy * dy) ** 0.5, 0.001)
+    ux = dx / length
+    uy = dy / length
+    px = -uy
+    py = ux
+    arrow_len = 3.0
+    arrow_width = 1.4
+    left_x = tip_x + ux * arrow_len + px * arrow_width
+    left_y = tip_y + uy * arrow_len + py * arrow_width
+    right_x = tip_x + ux * arrow_len - px * arrow_width
+    right_y = tip_y + uy * arrow_len - py * arrow_width
+    return f"M {tip_x:.2f} {tip_y:.2f} L {left_x:.2f} {left_y:.2f} L {right_x:.2f} {right_y:.2f} Z"

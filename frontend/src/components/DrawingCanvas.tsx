@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { Check, Move, ScanSearch, X, ZoomIn, ZoomOut } from "lucide-react";
+import { Check, CircleDot, Diameter, DraftingCompass, Move, Radius, Ruler, ScanSearch, Trash2, Triangle, X, ZoomIn, ZoomOut } from "lucide-react";
 import { Circle, Group, Image as KonvaImage, Layer, Line, Path, Rect, Stage, Text } from "react-konva";
 import type { KonvaEventObject } from "konva/lib/Node";
 import type { Stage as KonvaStage } from "konva/lib/Stage";
@@ -27,6 +28,9 @@ type Point = {
   y: number;
 };
 
+type DimensionType = "Distance" | "DistanceX" | "DistanceY" | "Radius" | "Diameter" | "Angle" | "Angle3Pt";
+type DimensionTool = "DistanceX" | "DistanceY" | "Distance" | "Radius" | "Diameter" | "Angle" | "Angle3Pt";
+
 type PreviewViewState = {
   id: string;
   kind: string;
@@ -37,6 +41,12 @@ type PreviewViewState = {
   width_mm: number;
   height_mm: number;
   selection_bounds_mm: Bounds2D;
+  source_ref?: {
+    id: string;
+    shape_id: string;
+    role: string;
+    entity_kind?: string;
+  };
 };
 
 type PreviewDimension = {
@@ -45,14 +55,27 @@ type PreviewDimension = {
   label: string;
   value: number;
   units: string;
+  dimension_type?: DimensionType;
+  measurement_type?: "Projected" | "True";
+  references?: string[];
+  references_2d?: string[];
+  references_3d?: string[];
+  computed_geometry?: Record<string, unknown>;
+  formatted_text?: string | null;
+  format_spec?: string | null;
   placement: {
     x_mm: number;
     y_mm: number;
+    user_locked?: boolean;
   };
   anchor_a: {
+    view_id?: string;
+    primitive_id?: string;
     role: string;
   };
   anchor_b: {
+    view_id?: string;
+    primitive_id?: string;
     role: string;
   };
 };
@@ -224,6 +247,10 @@ export function DrawingCanvas({ preview, selectedViewId, busy = false, toolbarPo
   const hasExactTemplate = Boolean(preview.document.page_template?.source_path && exactTemplateSvg.trim());
   const templateImageKey = useMemo(() => hashString(exactTemplateSvg), [exactTemplateSvg]);
   const templateImage = useSvgTemplateImage(hasExactTemplate ? exactTemplateSvg : null);
+
+  useEffect(() => {
+    stageRef.current?.batchDraw();
+  }, [exactTemplateSvg, templateImage]);
 
   useEffect(() => {
     setViewBox(createSheetViewBox(sheet));
@@ -401,18 +428,50 @@ export function DrawingCanvas({ preview, selectedViewId, busy = false, toolbarPo
     const dy = interaction.current.y - interaction.start.y;
     for (const dimension of preview.document.dimensions) {
       const startPos = interaction.initialPositions[dimension.id];
-      if (!startPos) continue;
-      const orientation = getDimensionOrientation(dimension);
-      drafts[dimension.id] = {
-        ...dimension,
-        placement: {
-          x_mm: orientation === "vertical" ? round2(startPos.x + dx) : startPos.x,
-          y_mm: orientation === "horizontal" ? round2(startPos.y + dy) : startPos.y,
-        },
-      };
+      const viewIsDragged = dimension.view_id in interaction.initialPositions;
+
+      // When the parent view is being dragged, translate the dimension by the
+      // view's actual delta so it stays anchored to the view (this also
+      // respects orthographic linking constraints applied to the view).
+      if (viewIsDragged) {
+        const previewView = preview.views.find((candidate) => candidate.id === dimension.view_id);
+        const draftView = viewDrafts[dimension.view_id];
+        if (previewView && draftView) {
+          const viewDx = draftView.x_mm - previewView.x_mm;
+          const viewDy = draftView.y_mm - previewView.y_mm;
+          if (viewDx !== 0 || viewDy !== 0) {
+            drafts[dimension.id] = translateDimension(dimension, viewDx, viewDy);
+          }
+        }
+        continue;
+      }
+
+      if (startPos) {
+        const orientation = getDimensionOrientation(dimension);
+        const nextPlacement =
+          orientation === "horizontal"
+            ? { x_mm: startPos.x, y_mm: round2(startPos.y + dy) }
+            : orientation === "vertical"
+              ? { x_mm: round2(startPos.x + dx), y_mm: startPos.y }
+              : { x_mm: round2(startPos.x + dx), y_mm: round2(startPos.y + dy) };
+        drafts[dimension.id] = withDimensionPlacement(dimension, nextPlacement.x_mm, nextPlacement.y_mm);
+        continue;
+      }
+
+      const previewView = preview.views.find((candidate) => candidate.id === dimension.view_id);
+      const draftView = viewDrafts[dimension.view_id];
+      if (!previewView || !draftView) {
+        continue;
+      }
+
+      const viewDx = draftView.x_mm - previewView.x_mm;
+      const viewDy = draftView.y_mm - previewView.y_mm;
+      if (viewDx !== 0 || viewDy !== 0) {
+        drafts[dimension.id] = translateDimension(dimension, viewDx, viewDy);
+      }
     }
     return drafts;
-  }, [interaction, preview.document.dimensions]);
+  }, [interaction, preview.document.dimensions, preview.views, viewDrafts]);
 
   const renderedViews = useMemo(
     () => preview.views.map((view) => viewDrafts[view.id] ?? commitDrafts?.views[view.id] ?? view),
@@ -604,7 +663,12 @@ export function DrawingCanvas({ preview, selectedViewId, busy = false, toolbarPo
     const point = worldPointFromClient(clientX, clientY, wrapperRef.current, viewBox);
     if (!point) return;
     const nextSelected = selectedIds.includes(view.id) ? selectedIds : [view.id];
-    const dragTargetIds = getViewDragTargetIds(view, nextSelected, renderedViews);
+    const viewDragTargetIds = getViewDragTargetIds(view, nextSelected, renderedViews);
+    const viewDragSet = new Set(viewDragTargetIds);
+    const attachedDimensionIds = renderedDimensions
+      .filter((dimension) => viewDragSet.has(dimension.view_id))
+      .map((dimension) => dimension.id);
+    const dragTargetIds = [...viewDragTargetIds, ...attachedDimensionIds];
     setSelectedIds(nextSelected);
     onSelectView(view.id);
     beginDragSelection(dragTargetIds, point);
@@ -680,6 +744,46 @@ export function DrawingCanvas({ preview, selectedViewId, busy = false, toolbarPo
     setSavingTitleBlockFieldId(null);
   }
 
+  async function createDimensionFromTool(tool: DimensionTool) {
+    if (busy) return;
+    const viewId = selectedIds.find((id) => renderedViews.some((view) => view.id === id)) ?? selectedViewId ?? renderedViews.find((view) => view.kind !== "isometric")?.id;
+    const view = renderedViews.find((candidate) => candidate.id === viewId);
+    if (!view) return;
+    const dimension = buildDimensionFromTool(tool, view, sceneLayers);
+    if (!dimension) return;
+    const applied = await onApplyCommands([
+      {
+        id: `cmd-create-${dimension.id}-${Date.now()}`,
+        kind: "CreateDimension",
+        target_id: dimension.id,
+        before: {},
+        after: { dimension },
+      },
+    ]);
+    if (applied !== false) {
+      setSelectedIds([dimension.id]);
+      onSelectView(dimension.view_id);
+    }
+  }
+
+  async function deleteSelectedDimensions() {
+    if (busy) return;
+    const dimensions = renderedDimensions.filter((dimension) => selectedIds.includes(dimension.id));
+    if (!dimensions.length) return;
+    const applied = await onApplyCommands(
+      dimensions.map((dimension) => ({
+        id: `cmd-delete-${dimension.id}-${Date.now()}`,
+        kind: "DeleteDimension",
+        target_id: dimension.id,
+        before: { dimension },
+        after: {},
+      })),
+    );
+    if (applied !== false) {
+      setSelectedIds([]);
+    }
+  }
+
   async function onPointerUp() {
     if (!interaction || finishingInteractionRef.current) {
       return;
@@ -720,6 +824,18 @@ export function DrawingCanvas({ preview, selectedViewId, busy = false, toolbarPo
         }
         setInteraction(null);
         if (commands.length) {
+          for (const dimension of renderedDimensions) {
+            const previewDimension = preview.document.dimensions.find((candidate) => candidate.id === dimension.id);
+            if (!previewDimension) {
+              continue;
+            }
+            if (
+              previewDimension.placement.x_mm !== dimension.placement.x_mm ||
+              previewDimension.placement.y_mm !== dimension.placement.y_mm
+            ) {
+              nextCommitDrafts.dimensions[dimension.id] = dimension;
+            }
+          }
           setCommitDrafts(nextCommitDrafts);
           const applied = await onApplyCommands(commands);
           if (applied === false) {
@@ -745,6 +861,17 @@ export function DrawingCanvas({ preview, selectedViewId, busy = false, toolbarPo
     if (event.target !== event.target.getStage()) return;
     onBackgroundPointerDown(event.evt.clientX, event.evt.clientY, event.evt.button);
   }
+
+  const selectedDimensionCount = selectedIds.filter((id) => renderedDimensions.some((dimension) => dimension.id === id)).length;
+  const dimensionTools: Array<{ tool: DimensionTool; label: string; icon: ReactNode }> = [
+    { tool: "DistanceX", label: "Horizontal dimension", icon: <Ruler /> },
+    { tool: "DistanceY", label: "Vertical dimension", icon: <Ruler className="rotate-90" /> },
+    { tool: "Distance", label: "Aligned dimension", icon: <DraftingCompass /> },
+    { tool: "Diameter", label: "Diameter dimension", icon: <Diameter /> },
+    { tool: "Radius", label: "Radius dimension", icon: <Radius /> },
+    { tool: "Angle", label: "Angle dimension", icon: <Triangle /> },
+    { tool: "Angle3Pt", label: "3-point angle dimension", icon: <CircleDot /> },
+  ];
 
   const toolbar = (
     <div className="flex items-center gap-1 rounded-[8px] border bg-background/95 p-1 shadow-sm backdrop-blur">
@@ -775,6 +902,32 @@ export function DrawingCanvas({ preview, selectedViewId, busy = false, toolbarPo
       </Button>
       <Button type="button" size="icon-sm" variant="outline" aria-label="Zoom out" title="Zoom out" onClick={() => zoomViewBox(1.1)}>
         <ZoomOut />
+      </Button>
+      <div className="mx-1 h-6 w-px bg-border" />
+      {dimensionTools.map((tool) => (
+        <Button
+          key={tool.tool}
+          type="button"
+          size="icon-sm"
+          variant="outline"
+          aria-label={tool.label}
+          title={tool.label}
+          disabled={busy}
+          onClick={() => void createDimensionFromTool(tool.tool)}
+        >
+          {tool.icon}
+        </Button>
+      ))}
+      <Button
+        type="button"
+        size="icon-sm"
+        variant="outline"
+        aria-label="Delete selected dimensions"
+        title="Delete selected dimensions"
+        disabled={busy || selectedDimensionCount === 0}
+        onClick={() => void deleteSelectedDimensions()}
+      >
+        <Trash2 />
       </Button>
     </div>
   );
@@ -975,63 +1128,53 @@ export function DrawingCanvas({ preview, selectedViewId, busy = false, toolbarPo
 
         {activeTitleBlockEdit && activeTitleBlockField && activeTitleBlockOverlay ? (
           <div
-            className="absolute z-20 rounded-lg border border-slate-200 bg-white p-3 shadow-xl"
+            className="absolute z-20 rounded-lg border border-slate-200 bg-white p-2 shadow-xl"
             style={getTitleBlockPopupStyle(activeTitleBlockOverlay.rect, viewportSize)}
             data-title-block-popup={activeTitleBlockField.id}
             onPointerDown={(event) => event.stopPropagation()}
             onWheel={(event) => event.stopPropagation()}
           >
-            <div className="mb-2 flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <p className="truncate text-xs font-semibold tracking-[0.14em] text-slate-500 uppercase">{activeTitleBlockField.label}</p>
-                <p className="truncate text-sm font-medium text-slate-900">{activeTitleBlockField.value || "Empty field"}</p>
-              </div>
+            <p className="mb-1.5 truncate text-xs font-medium text-slate-500">{activeTitleBlockField.label}</p>
+            <div className="flex items-center gap-1">
+              <Input
+                ref={titleBlockInputRef}
+                value={activeTitleBlockEdit.draft}
+                disabled={busy || savingTitleBlockFieldId === activeTitleBlockField.id}
+                autoComplete="off"
+                className="h-8 min-w-0 flex-1 text-sm"
+                data-title-block-popup-input={activeTitleBlockField.id}
+                onChange={(event) => setActiveTitleBlockEdit((current) => (current ? { ...current, draft: event.target.value } : current))}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    void applyTitleBlockFieldEdit();
+                  }
+                  if (event.key === "Escape") {
+                    event.preventDefault();
+                    setActiveTitleBlockEdit(null);
+                  }
+                }}
+              />
+              <Button
+                type="button"
+                size="icon"
+                className="size-8 shrink-0"
+                onClick={() => void applyTitleBlockFieldEdit()}
+                disabled={busy || savingTitleBlockFieldId === activeTitleBlockField.id || activeTitleBlockEdit.draft === activeTitleBlockField.value}
+                aria-label="Apply"
+                data-title-block-popup-apply={activeTitleBlockField.id}
+              >
+                <Check className="size-4" />
+              </Button>
               <Button
                 type="button"
                 size="icon"
                 variant="ghost"
-                className="h-7 w-7"
+                className="size-8 shrink-0"
                 aria-label="Close title block editor"
                 onClick={() => setActiveTitleBlockEdit(null)}
               >
-                <X />
-              </Button>
-            </div>
-            <Input
-              ref={titleBlockInputRef}
-              value={activeTitleBlockEdit.draft}
-              disabled={busy || savingTitleBlockFieldId === activeTitleBlockField.id}
-              autoComplete="off"
-              data-title-block-popup-input={activeTitleBlockField.id}
-              onChange={(event) => setActiveTitleBlockEdit((current) => (current ? { ...current, draft: event.target.value } : current))}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  event.preventDefault();
-                  void applyTitleBlockFieldEdit();
-                }
-                if (event.key === "Escape") {
-                  event.preventDefault();
-                  setActiveTitleBlockEdit(null);
-                }
-              }}
-            />
-            <div className="mt-3 flex items-center justify-end gap-2">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => setActiveTitleBlockEdit(null)}
-                disabled={busy || savingTitleBlockFieldId === activeTitleBlockField.id}
-              >
-                Cancel
-              </Button>
-              <Button
-                type="button"
-                onClick={() => void applyTitleBlockFieldEdit()}
-                disabled={busy || savingTitleBlockFieldId === activeTitleBlockField.id || activeTitleBlockEdit.draft === activeTitleBlockField.value}
-                data-title-block-popup-apply={activeTitleBlockField.id}
-              >
-                <Check />
-                Apply
+                <X className="size-4" />
               </Button>
             </div>
           </div>
@@ -1271,73 +1414,190 @@ function renderDimension(
   hovered: boolean,
   camera: Camera,
 ) {
+  const geometry = dimension.computed_geometry ?? {};
+  const helperStroke = hovered ? "#60a5fa" : "#64748b";
+  const mainStroke = selected ? "#dc2626" : hovered ? "#2563eb" : "#334155";
+  const labelStroke = selected ? "#fca5a5" : hovered ? "#93c5fd" : "#cbd5e1";
+  const labelFill = hovered ? "#eff6ff" : "white";
+  const mainStrokeWidth = selected || hovered ? 1.5 : 1;
+  const label = geometryPoint(geometry["label"]) ?? { x: dimension.placement.x_mm, y: dimension.placement.y_mm };
+  const labelScreen = worldToScreen(label, camera);
+  const text = dimension.formatted_text || dimension.label;
+  const labelWidth = Math.max(34 * camera.scaleX, 42);
+  const labelHeight = Math.max(9 * camera.scaleY, 18);
+
+  if (geometry["kind"] === "linear") {
+    const extensionStart = geometryPoint(geometry["extension_start"]);
+    const extensionEnd = geometryPoint(geometry["extension_end"]);
+    const lineStart = geometryPoint(geometry["line_start"]);
+    const lineEnd = geometryPoint(geometry["line_end"]);
+    if (extensionStart && extensionEnd && lineStart && lineEnd) {
+      const extStart = worldToScreen(extensionStart, camera);
+      const extEnd = worldToScreen(extensionEnd, camera);
+      const a = worldToScreen(lineStart, camera);
+      const b = worldToScreen(lineEnd, camera);
+      return (
+        <Group key={dimension.id} listening={false}>
+          <Line points={[extStart.x, extStart.y, a.x, a.y]} stroke={helperStroke} dash={[4, 4]} strokeWidth={hovered ? 1.2 : 0.8} />
+          <Line points={[extEnd.x, extEnd.y, b.x, b.y]} stroke={helperStroke} dash={[4, 4]} strokeWidth={hovered ? 1.2 : 0.8} />
+          <Line points={[a.x, a.y, b.x, b.y]} stroke={mainStroke} strokeWidth={mainStrokeWidth} />
+          {renderArrowHead(a, b, mainStroke)}
+          {renderArrowHead(b, a, mainStroke)}
+          {renderDimensionLabel(labelScreen, labelWidth, labelHeight, text, mainStroke, labelStroke, labelFill)}
+        </Group>
+      );
+    }
+  }
+
+  if (geometry["kind"] === "radial") {
+    const anchor = geometryPoint(geometry["anchor"]);
+    if (anchor) {
+      const anchorScreen = worldToScreen(anchor, camera);
+      return (
+        <Group key={dimension.id} listening={false}>
+          <Line points={[anchorScreen.x, anchorScreen.y, labelScreen.x, labelScreen.y]} stroke={mainStroke} strokeWidth={mainStrokeWidth} />
+          {renderArrowHead(anchorScreen, labelScreen, mainStroke)}
+          {renderDimensionLabel(labelScreen, labelWidth, labelHeight, text, mainStroke, labelStroke, labelFill)}
+        </Group>
+      );
+    }
+  }
+
+  if (geometry["kind"] === "angular") {
+    const vertex = geometryPoint(geometry["vertex"]);
+    const first = geometryPoint(geometry["first"]);
+    const second = geometryPoint(geometry["second"]);
+    if (vertex && first && second) {
+      const v = worldToScreen(vertex, camera);
+      const a = worldToScreen(first, camera);
+      const b = worldToScreen(second, camera);
+      const radius = Math.max(18, Math.min(distance(a, v), distance(b, v), distance(labelScreen, v)));
+      const start = pointOnRay(v, a, radius);
+      const end = pointOnRay(v, b, radius);
+      const largeArc = angleBetween(v, start, end) > Math.PI ? 1 : 0;
+      const arcPath = `M ${start.x} ${start.y} A ${radius} ${radius} 0 ${largeArc} 1 ${end.x} ${end.y}`;
+      return (
+        <Group key={dimension.id} listening={false}>
+          <Line points={[v.x, v.y, a.x, a.y]} stroke={helperStroke} dash={[4, 4]} strokeWidth={hovered ? 1.2 : 0.8} />
+          <Line points={[v.x, v.y, b.x, b.y]} stroke={helperStroke} dash={[4, 4]} strokeWidth={hovered ? 1.2 : 0.8} />
+          <Path data={arcPath} stroke={mainStroke} strokeWidth={mainStrokeWidth} />
+          {renderArrowHead(start, end, mainStroke)}
+          {renderArrowHead(end, start, mainStroke)}
+          {renderDimensionLabel(labelScreen, labelWidth, labelHeight, text, mainStroke, labelStroke, labelFill)}
+        </Group>
+      );
+    }
+  }
+
   const view = views.find((candidate) => candidate.id === dimension.view_id);
   if (!view) return null;
 
   const a = worldToScreen(getAnchorWorld(view, dimension.anchor_a.role), camera);
   const b = worldToScreen(getAnchorWorld(view, dimension.anchor_b.role), camera);
   const horizontal = getDimensionOrientation(dimension) === "horizontal";
-  const helperStroke = hovered ? "#60a5fa" : "#64748b";
-  const mainStroke = selected ? "#dc2626" : hovered ? "#2563eb" : "#334155";
-  const labelStroke = selected ? "#fca5a5" : hovered ? "#93c5fd" : "#cbd5e1";
-  const labelFill = hovered ? "#eff6ff" : "white";
-  const mainStrokeWidth = selected || hovered ? 1.5 : 1;
 
   if (horizontal) {
     const y = worldToScreen({ x: 0, y: dimension.placement.y_mm }, camera).y;
     const midX = (a.x + b.x) / 2;
-    const labelWidth = 36 * camera.scaleX;
-    const labelHeight = 18 * camera.scaleY;
     return (
       <Group key={dimension.id} listening={false}>
         <Line points={[a.x, a.y, a.x, y]} stroke={helperStroke} dash={[4, 4]} strokeWidth={hovered ? 1.2 : 0.8} />
         <Line points={[b.x, b.y, b.x, y]} stroke={helperStroke} dash={[4, 4]} strokeWidth={hovered ? 1.2 : 0.8} />
         <Line points={[a.x, y, b.x, y]} stroke={mainStroke} strokeWidth={mainStrokeWidth} />
-        <Line points={[a.x, y, a.x + 8, y - 4, a.x + 8, y + 4, a.x, y]} fill={mainStroke} closed />
-        <Line points={[b.x, y, b.x - 8, y - 4, b.x - 8, y + 4, b.x, y]} fill={mainStroke} closed />
-        <Rect x={midX - labelWidth / 2} y={y - labelHeight / 2} width={labelWidth} height={labelHeight} cornerRadius={4} fill={labelFill} stroke={labelStroke} strokeWidth={0.9} />
-        <Text
-          x={midX - labelWidth / 2}
-          y={y - labelHeight / 2}
-          width={labelWidth}
-          height={labelHeight}
-          text={dimension.label}
-          align="center"
-          verticalAlign="middle"
-          fontSize={Math.max(6.5 * Math.min(camera.scaleX, camera.scaleY), 12)}
-          fontStyle="bold"
-          fill={mainStroke}
-        />
+        {renderArrowHead({ x: a.x, y }, { x: b.x, y }, mainStroke)}
+        {renderArrowHead({ x: b.x, y }, { x: a.x, y }, mainStroke)}
+        {renderDimensionLabel({ x: midX, y }, labelWidth, labelHeight, text, mainStroke, labelStroke, labelFill)}
       </Group>
     );
   }
 
   const x = worldToScreen({ x: dimension.placement.x_mm, y: 0 }, camera).x;
   const midY = (a.y + b.y) / 2;
-  const labelWidth = 36 * camera.scaleX;
-  const labelHeight = 18 * camera.scaleY;
   return (
     <Group key={dimension.id} listening={false}>
       <Line points={[a.x, a.y, x, a.y]} stroke={helperStroke} dash={[4, 4]} strokeWidth={hovered ? 1.2 : 0.8} />
       <Line points={[b.x, b.y, x, b.y]} stroke={helperStroke} dash={[4, 4]} strokeWidth={hovered ? 1.2 : 0.8} />
       <Line points={[x, a.y, x, b.y]} stroke={mainStroke} strokeWidth={mainStrokeWidth} />
-      <Line points={[x, a.y, x - 4, a.y + 8, x + 4, a.y + 8, x, a.y]} fill={mainStroke} closed />
-      <Line points={[x, b.y, x - 4, b.y - 8, x + 4, b.y - 8, x, b.y]} fill={mainStroke} closed />
-      <Rect x={x - labelWidth / 2} y={midY - labelHeight / 2} width={labelWidth} height={labelHeight} cornerRadius={4} fill={labelFill} stroke={labelStroke} strokeWidth={0.9} />
-      <Text
-        x={x - labelWidth / 2}
-        y={midY - labelHeight / 2}
-        width={labelWidth}
-        height={labelHeight}
-        text={dimension.label}
-        align="center"
-        verticalAlign="middle"
-        fontSize={Math.max(6.5 * Math.min(camera.scaleX, camera.scaleY), 12)}
-        fontStyle="bold"
-        fill={mainStroke}
-      />
+      {renderArrowHead({ x, y: a.y }, { x, y: b.y }, mainStroke)}
+      {renderArrowHead({ x, y: b.y }, { x, y: a.y }, mainStroke)}
+      {renderDimensionLabel({ x, y: midY }, labelWidth, labelHeight, text, mainStroke, labelStroke, labelFill)}
     </Group>
   );
+}
+
+function renderArrowHead(tip: ScreenPoint, tail: ScreenPoint, fill: string) {
+  const dx = tail.x - tip.x;
+  const dy = tail.y - tip.y;
+  const length = Math.max(Math.hypot(dx, dy), 0.001);
+  const ux = dx / length;
+  const uy = dy / length;
+  const px = -uy;
+  const py = ux;
+  const arrowLength = 8;
+  const arrowWidth = 4;
+  return (
+    <Line
+      points={[
+        tip.x,
+        tip.y,
+        tip.x + ux * arrowLength + px * arrowWidth,
+        tip.y + uy * arrowLength + py * arrowWidth,
+        tip.x + ux * arrowLength - px * arrowWidth,
+        tip.y + uy * arrowLength - py * arrowWidth,
+      ]}
+      fill={fill}
+      closed
+    />
+  );
+}
+
+function renderDimensionLabel(center: ScreenPoint, width: number, height: number, text: string, fill: string, stroke: string, background: string) {
+  return (
+    <>
+      <Rect x={center.x - width / 2} y={center.y - height / 2} width={width} height={height} cornerRadius={4} fill={background} stroke={stroke} strokeWidth={0.9} />
+      <Text
+        x={center.x - width / 2}
+        y={center.y - height / 2}
+        width={width}
+        height={height}
+        text={text}
+        align="center"
+        verticalAlign="middle"
+        fontSize={Math.max(Math.min(height * 0.52, 13), 10)}
+        fontStyle="bold"
+        fill={fill}
+      />
+    </>
+  );
+}
+
+function geometryPoint(value: unknown): Point | null {
+  if (!value || typeof value !== "object") return null;
+  const candidate = value as Record<string, unknown>;
+  const x = Number(candidate.x);
+  const y = Number(candidate.y);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+  return { x, y };
+}
+
+function pointOnRay(origin: ScreenPoint, through: ScreenPoint, radius: number): ScreenPoint {
+  const dx = through.x - origin.x;
+  const dy = through.y - origin.y;
+  const length = Math.max(Math.hypot(dx, dy), 0.001);
+  return {
+    x: origin.x + (dx / length) * radius,
+    y: origin.y + (dy / length) * radius,
+  };
+}
+
+function angleBetween(origin: ScreenPoint, start: ScreenPoint, end: ScreenPoint) {
+  const a0 = Math.atan2(start.y - origin.y, start.x - origin.x);
+  const a1 = Math.atan2(end.y - origin.y, end.x - origin.x);
+  return Math.abs(a1 - a0);
+}
+
+function distance(a: ScreenPoint, b: ScreenPoint) {
+  return Math.hypot(a.x - b.x, a.y - b.y);
 }
 
 type Camera = {
@@ -1587,6 +1847,16 @@ function boundsToRect(bounds: Bounds2D): Marquee {
 }
 
 function getDimensionOrientation(dimension: PreviewDimension) {
+  const geometry = dimension.computed_geometry ?? {};
+  if (geometry["kind"] === "linear" && typeof geometry["orientation"] === "string") {
+    if (geometry["orientation"] === "horizontal") return "horizontal";
+    if (geometry["orientation"] === "vertical") return "vertical";
+    return "free";
+  }
+  const type = dimension.dimension_type;
+  if (type === "DistanceX") return "horizontal";
+  if (type === "DistanceY") return "vertical";
+  if (type === "Radius" || type === "Diameter" || type === "Angle" || type === "Angle3Pt") return "free";
   const roles = [dimension.anchor_a.role, dimension.anchor_b.role];
   if (roles.some((role) => role.includes("x"))) {
     return "horizontal";
@@ -1612,6 +1882,9 @@ function getAnchorWorld(view: PreviewViewState, role: string): Point {
 }
 
 function getDimensionBounds(dimension: PreviewDimension, views: PreviewViewState[]): Marquee {
+  const geometryBounds = getComputedDimensionBounds(dimension);
+  if (geometryBounds) return geometryBounds;
+
   const view = views.find((candidate) => candidate.id === dimension.view_id);
   if (!view) return { x: 0, y: 0, width: 0, height: 0 };
   const a = getAnchorWorld(view, dimension.anchor_a.role);
@@ -1641,6 +1914,10 @@ function round2(value: number) {
 }
 
 function getDimensionOverlayAnchor(dimension: PreviewDimension, views: PreviewViewState[]) {
+  const label = geometryPoint(dimension.computed_geometry?.["label"]);
+  if (label) {
+    return label;
+  }
   const view = views.find((candidate) => candidate.id === dimension.view_id);
   if (!view) {
     return { x: Number.NaN, y: Number.NaN };
@@ -1651,6 +1928,232 @@ function getDimensionOverlayAnchor(dimension: PreviewDimension, views: PreviewVi
     return { x: (a.x + b.x) / 2, y: dimension.placement.y_mm };
   }
   return { x: dimension.placement.x_mm, y: (a.y + b.y) / 2 };
+}
+
+function getComputedDimensionBounds(dimension: PreviewDimension): Marquee | null {
+  const geometry = dimension.computed_geometry ?? {};
+  const keys =
+    geometry["kind"] === "linear"
+      ? ["extension_start", "extension_end", "line_start", "line_end", "label"]
+      : geometry["kind"] === "radial"
+        ? ["center", "anchor", "label"]
+        : geometry["kind"] === "angular"
+          ? ["vertex", "first", "second", "label"]
+          : [];
+  const points = keys.map((key) => geometryPoint(geometry[key])).filter((point): point is Point => Boolean(point));
+  if (!points.length) return null;
+  const xs = points.map((point) => point.x);
+  const ys = points.map((point) => point.y);
+  const padding = 5;
+  return {
+    x: Math.min(...xs) - padding,
+    y: Math.min(...ys) - padding,
+    width: Math.max(...xs) - Math.min(...xs) + padding * 2,
+    height: Math.max(...ys) - Math.min(...ys) + padding * 2,
+  };
+}
+
+function withDimensionPlacement(dimension: PreviewDimension, x_mm: number, y_mm: number): PreviewDimension {
+  const computed = { ...(dimension.computed_geometry ?? {}) };
+  computed["label"] = { x: x_mm, y: y_mm };
+  if (computed["kind"] === "linear") {
+    const extensionStart = geometryPoint(computed["extension_start"]);
+    const extensionEnd = geometryPoint(computed["extension_end"]);
+    if (extensionStart && extensionEnd) {
+      if (computed["orientation"] === "horizontal") {
+        computed["line_start"] = { x: extensionStart.x, y: y_mm };
+        computed["line_end"] = { x: extensionEnd.x, y: y_mm };
+      } else {
+        computed["line_start"] = { x: x_mm, y: extensionStart.y };
+        computed["line_end"] = { x: x_mm, y: extensionEnd.y };
+      }
+    }
+  }
+  return {
+    ...dimension,
+    placement: { ...dimension.placement, x_mm, y_mm },
+    computed_geometry: computed,
+  };
+}
+
+function translateDimension(dimension: PreviewDimension, dx_mm: number, dy_mm: number): PreviewDimension {
+  if (dx_mm === 0 && dy_mm === 0) {
+    return dimension;
+  }
+  return {
+    ...dimension,
+    placement: {
+      ...dimension.placement,
+      x_mm: round2(dimension.placement.x_mm + dx_mm),
+      y_mm: round2(dimension.placement.y_mm + dy_mm),
+    },
+    computed_geometry: translateDimensionGeometry(dimension.computed_geometry ?? {}, dx_mm, dy_mm) as Record<string, unknown>,
+  };
+}
+
+function translateDimensionGeometry(value: unknown, dx_mm: number, dy_mm: number): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => translateDimensionGeometry(item, dx_mm, dy_mm));
+  }
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+
+  const translated = Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).map(([key, item]) => [key, translateDimensionGeometry(item, dx_mm, dy_mm)]),
+  );
+  const x = translated.x;
+  const y = translated.y;
+  if (typeof x === "number" && typeof y === "number") {
+    translated.x = round2(x + dx_mm);
+    translated.y = round2(y + dy_mm);
+  }
+  return translated;
+}
+
+function buildDimensionFromTool(tool: DimensionTool, view: PreviewViewState, sceneLayers: Record<string, SceneItem[]>): PreviewDimension | null {
+  const bounds = view.selection_bounds_mm;
+  const scale = view.scale || 1;
+  const baseId = `dim-${view.id}-${tool.toLowerCase()}-${Date.now()}`;
+  const primitiveId = view.source_ref?.id ?? view.id;
+
+  if (tool === "DistanceX" || tool === "DistanceY" || tool === "Distance") {
+    const horizontal = tool === "DistanceX";
+    const vertical = tool === "DistanceY";
+    const extensionStart = horizontal
+      ? { x: bounds.x_min, y: bounds.y_max }
+      : vertical
+        ? { x: bounds.x_max, y: bounds.y_min }
+        : { x: bounds.x_min, y: bounds.y_max };
+    const extensionEnd = horizontal
+      ? { x: bounds.x_max, y: bounds.y_max }
+      : vertical
+        ? { x: bounds.x_max, y: bounds.y_max }
+        : { x: bounds.x_max, y: bounds.y_min };
+    const label = horizontal
+      ? { x: (bounds.x_min + bounds.x_max) / 2, y: bounds.y_max + 10 }
+      : vertical
+        ? { x: bounds.x_max + 10, y: (bounds.y_min + bounds.y_max) / 2 }
+        : { x: (bounds.x_min + bounds.x_max) / 2 + 8, y: (bounds.y_min + bounds.y_max) / 2 + 8 };
+    const lineStart = horizontal
+      ? { x: extensionStart.x, y: label.y }
+      : vertical
+        ? { x: label.x, y: extensionStart.y }
+        : extensionStart;
+    const lineEnd = horizontal
+      ? { x: extensionEnd.x, y: label.y }
+      : vertical
+        ? { x: label.x, y: extensionEnd.y }
+        : extensionEnd;
+    const value = horizontal
+      ? (bounds.x_max - bounds.x_min) / scale
+      : vertical
+        ? (bounds.y_max - bounds.y_min) / scale
+        : Math.hypot(bounds.x_max - bounds.x_min, bounds.y_max - bounds.y_min) / scale;
+    const formattedText = formatDimensionText(tool, value);
+    return {
+      id: baseId,
+      view_id: view.id,
+      label: formattedText,
+      value: round2(value),
+      units: "mm",
+      dimension_type: tool,
+      measurement_type: "Projected",
+      references: [primitiveId],
+      references_2d: [primitiveId],
+      references_3d: [],
+      anchor_a: { view_id: view.id, primitive_id: primitiveId, role: horizontal ? "min-x" : "min-y" },
+      anchor_b: { view_id: view.id, primitive_id: primitiveId, role: horizontal ? "max-x" : "max-y" },
+      placement: { x_mm: label.x, y_mm: label.y },
+      computed_geometry: {
+        kind: "linear",
+        orientation: horizontal ? "horizontal" : vertical ? "vertical" : "aligned",
+        extension_start: extensionStart,
+        extension_end: extensionEnd,
+        line_start: lineStart,
+        line_end: lineEnd,
+        label,
+      },
+      formatted_text: formattedText,
+      format_spec: "%.2f",
+    };
+  }
+
+  if (tool === "Radius" || tool === "Diameter") {
+    const circle = findFirstCircleForView(view.id, sceneLayers);
+    const width = bounds.x_max - bounds.x_min;
+    const height = bounds.y_max - bounds.y_min;
+    const radius = circle?.radius ?? Math.min(width, height) / 6;
+    const center = circle ? { x: circle.x ?? bounds.x_min + width / 2, y: circle.y ?? bounds.y_min + height / 2 } : { x: bounds.x_min + width / 2, y: bounds.y_min + height / 2 };
+    const anchor = { x: center.x + radius, y: center.y };
+    const label = { x: center.x + radius + 12, y: center.y - radius - 12 };
+    const value = tool === "Diameter" ? (radius * 2) / scale : radius / scale;
+    const formattedText = formatDimensionText(tool, value);
+    return {
+      id: baseId,
+      view_id: view.id,
+      label: formattedText,
+      value: round2(value),
+      units: "mm",
+      dimension_type: tool,
+      measurement_type: "Projected",
+      references: [circle?.id ?? primitiveId],
+      references_2d: [circle?.id ?? primitiveId],
+      references_3d: [],
+      anchor_a: { view_id: view.id, primitive_id: circle?.id ?? primitiveId, role: "center" },
+      anchor_b: { view_id: view.id, primitive_id: circle?.id ?? primitiveId, role: "circle" },
+      placement: { x_mm: label.x, y_mm: label.y },
+      computed_geometry: { kind: "radial", center, radius, anchor, label },
+      formatted_text: formattedText,
+      format_spec: "%.2f",
+    };
+  }
+
+  const vertex = { x: bounds.x_min, y: bounds.y_max };
+  const first = { x: bounds.x_max, y: bounds.y_max };
+  const width = bounds.x_max - bounds.x_min;
+  const height = bounds.y_max - bounds.y_min;
+  const second = tool === "Angle3Pt" ? { x: bounds.x_min, y: bounds.y_min } : { x: bounds.x_min + width * 0.72, y: bounds.y_min };
+  const label = { x: bounds.x_min + width * 0.35, y: bounds.y_max - height * 0.35 };
+  const value = angleFromPoints(vertex, first, second);
+  const formattedText = formatDimensionText(tool, value);
+  return {
+    id: baseId,
+    view_id: view.id,
+    label: formattedText,
+    value: round2(value),
+    units: "mm",
+    dimension_type: tool,
+    measurement_type: "Projected",
+    references: [primitiveId],
+    references_2d: [primitiveId],
+    references_3d: [],
+    anchor_a: { view_id: view.id, primitive_id: primitiveId, role: "angle-a" },
+    anchor_b: { view_id: view.id, primitive_id: primitiveId, role: "angle-b" },
+    placement: { x_mm: label.x, y_mm: label.y },
+    computed_geometry: { kind: "angular", vertex, first, second, label },
+    formatted_text: formattedText,
+    format_spec: "%.2f",
+  };
+}
+
+function findFirstCircleForView(viewId: string, sceneLayers: Record<string, SceneItem[]>) {
+  return (sceneLayers.viewGeometryVisible ?? []).find((item) => item.kind === "circle" && item.group_id === viewId);
+}
+
+function formatDimensionText(type: DimensionType, value: number) {
+  const formatted = round2(value).toString();
+  if (type === "Radius") return `R${formatted}`;
+  if (type === "Diameter") return `\u2300${formatted}`;
+  if (type === "Angle" || type === "Angle3Pt") return `${formatted}\u00b0`;
+  return `${formatted} mm`;
+}
+
+function angleFromPoints(vertex: Point, first: Point, second: Point) {
+  const a0 = Math.atan2(first.y - vertex.y, first.x - vertex.x);
+  const a1 = Math.atan2(second.y - vertex.y, second.x - vertex.x);
+  const angle = Math.abs(((a1 - a0) * 180) / Math.PI) % 360;
+  return angle > 180 ? 360 - angle : angle;
 }
 
 function sceneStyle(classes: string[]) {

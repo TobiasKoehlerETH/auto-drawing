@@ -69,5 +69,6 @@ class PreviewService:
             views=views,
             validation=validation,
             qa_summary=qa_summary,
+            dimension_editing_available=True,
             tracked_draw_bridge_available=bundle.projection.adapter == "techdraw-native",
         )

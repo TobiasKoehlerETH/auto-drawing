@@ -32,6 +32,9 @@ class PreviewApiTests(unittest.TestCase):
         self.assertFalse(payload["scene_graph"]["layers"]["frame"])
         self.assertFalse(payload["scene_graph"]["layers"]["titleBlock"])
         self.assertTrue(payload["tracked_draw_bridge_available"])
+        self.assertTrue(payload["dimension_editing_available"])
+        self.assertTrue(payload["document"]["dimensions"])
+        self.assertTrue(payload["scene_graph"]["layers"]["dimensions"])
 
     def test_preview_command_updates_selected_view(self):
         create = self.client.post(
@@ -59,6 +62,10 @@ class PreviewApiTests(unittest.TestCase):
         moved_front = next(view for view in updated["views"] if view["id"] == "view-front")
         self.assertAlmostEqual(moved_front["x_mm"], front["x_mm"] + 12)
         self.assertAlmostEqual(moved_front["y_mm"], front["y_mm"] + 6)
+        linked_dimension = next(dimension for dimension in payload["document"]["dimensions"] if dimension["view_id"] == "view-front")
+        moved_dimension = next(dimension for dimension in updated["document"]["dimensions"] if dimension["id"] == linked_dimension["id"])
+        self.assertAlmostEqual(moved_dimension["placement"]["x_mm"], linked_dimension["placement"]["x_mm"] + 12)
+        self.assertAlmostEqual(moved_dimension["placement"]["y_mm"], linked_dimension["placement"]["y_mm"] + 6)
 
     def test_drawing_preview_from_occt_mesh_payload(self):
         response = self.client.post(
@@ -106,7 +113,8 @@ class PreviewApiTests(unittest.TestCase):
         self.assertEqual(len(isometric["visible_edges"]), 6)
         self.assertTrue(any(len(edge["points"]) > 2 for edge in isometric["visible_edges"]))
         self.assertFalse(isometric["hidden_edges"])
-        self.assertFalse(payload["document"]["dimensions"])
+        self.assertTrue(payload["dimension_editing_available"])
+        self.assertTrue(payload["document"]["dimensions"])
 
 
 if __name__ == "__main__":

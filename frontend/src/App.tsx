@@ -1,11 +1,7 @@
 import { startTransition, useEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type RefObject } from "react";
 import {
-  AlertTriangle,
   Box,
   ChevronDown,
-  CircleDot,
-  FileInput,
-  Layers3,
   Loader2,
   Ruler,
   SquareStack,
@@ -14,9 +10,8 @@ import {
 
 import { DrawingCanvas } from "@/components/DrawingCanvas";
 import { StepViewer } from "@/components/StepViewer";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -26,13 +21,11 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Separator } from "@/components/ui/separator";
 import {
   Sidebar,
   SidebarContent,
   SidebarGroup,
   SidebarGroupContent,
-  SidebarGroupLabel,
   SidebarHeader,
   SidebarInset,
   SidebarMenu,
@@ -40,9 +33,10 @@ import {
   SidebarMenuItem,
   SidebarProvider,
   SidebarRail,
-  SidebarSeparator,
   useSidebar,
 } from "@/components/ui/sidebar";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { importStepBuffer, type ImportResult } from "@/lib/occtStepImport";
 import { cn } from "@/lib/utils";
 
@@ -351,10 +345,15 @@ export default function App() {
         throw new Error(`Update failed (${response.status}): ${await response.text()}`);
       }
       const nextPreview: DrawingPreview = await response.json();
-      startTransition(() => {
+      if (options.quiet) {
         setPreview(nextPreview);
         setStatus("");
-      });
+      } else {
+        startTransition(() => {
+          setPreview(nextPreview);
+          setStatus("");
+        });
+      }
       return true;
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Failed to update drawing");
@@ -394,102 +393,102 @@ export default function App() {
   };
 
   return (
-    <SidebarProvider
-      className="bg-sidebar"
-      style={
-        {
-          "--sidebar-width": "18rem",
-        } as CSSProperties
-      }
-    >
-      <input
-        ref={inputRef}
-        type="file"
-        accept=".step,.stp,.STEP,.STP,.sldprt,.SLDPRT"
-        onChange={handleUpload}
-        disabled={busy}
-        className="hidden"
-      />
-      <WorkbenchSidebar
-        source={source}
-        preview={preview}
-        status={status}
-        busy={busy}
-        loadingModel={loadingModel}
-        savingPreview={savingPreview}
-        inputRef={inputRef}
-        scaleState={scaleState}
-      />
-      <SidebarInset className="min-w-0 overflow-hidden bg-muted/30">
-        <div className="flex min-h-0 flex-1 flex-col gap-3 p-3 md:gap-4 md:p-4 xl:grid xl:h-svh xl:grid-cols-[minmax(0,1fr)_minmax(320px,380px)] xl:overflow-hidden">
-          <main className="min-w-0 xl:min-h-0">
-            <Card className="h-full gap-0 overflow-hidden rounded-[8px] border-border/80 bg-card py-0 shadow-sm">
-              <CardHeader className="border-b px-4 py-3 md:px-5">
-                <div className="flex min-w-0 items-center justify-between gap-3">
-                  <div className="min-w-0">
-                    <CardTitle className="truncate text-sm">Drawing Sheet</CardTitle>
-                    <CardDescription className="truncate text-xs">
-                      {preview
-                        ? `${preview.document.sheet.width_mm} x ${preview.document.sheet.height_mm} mm, ${preview.views.length} views`
-                        : "Load a STEP model to generate the first sheet"}
-                    </CardDescription>
+    <TooltipProvider delayDuration={150}>
+      <SidebarProvider
+        className="bg-sidebar"
+        defaultOpen={false}
+        style={
+          {
+            "--sidebar-width": "16rem",
+          } as CSSProperties
+        }
+      >
+        <input
+          ref={inputRef}
+          type="file"
+          accept=".step,.stp,.STEP,.STP,.sldprt,.SLDPRT"
+          onChange={handleUpload}
+          disabled={busy}
+          className="hidden"
+        />
+        <WorkbenchSidebar
+          source={source}
+          preview={preview}
+          busy={busy}
+          loadingModel={loadingModel}
+          savingPreview={savingPreview}
+          inputRef={inputRef}
+          scaleState={scaleState}
+        />
+        <SidebarInset className="min-w-0 overflow-hidden bg-muted/30">
+          <div className="flex min-h-0 flex-1 flex-col p-3 md:p-4">
+            <Card className="flex h-full min-h-0 flex-col gap-0 overflow-hidden rounded-[8px] border-border/80 bg-card py-0 shadow-sm">
+              <Tabs
+                defaultValue="sheet"
+                className="flex h-full min-h-0 flex-col gap-0"
+              >
+                <div className="flex items-center justify-between gap-3 border-b px-3 py-2">
+                  <TabsList variant="line" className="h-8">
+                    <TabsTrigger value="sheet" className="gap-1.5 px-2 text-xs">
+                      <Ruler className="size-3.5" />
+                      Sheet
+                    </TabsTrigger>
+                    <TabsTrigger value="model" className="gap-1.5 px-2 text-xs">
+                      <Box className="size-3.5" />
+                      Model
+                    </TabsTrigger>
+                  </TabsList>
+                  <div className="flex items-center gap-1">
+                    <div ref={setDrawingToolbarPortal} className={cn("flex items-center", !preview && "hidden")} />
+                    <div ref={setModelViewToolbarPortal} className={cn("flex items-center", !source?.imported && "hidden")} />
                   </div>
-                  <div ref={setDrawingToolbarPortal} className={cn("min-h-8 shrink-0", !preview && "hidden")} />
                 </div>
-              </CardHeader>
-              <CardContent className="min-h-0 flex-1 p-2 md:p-3">
-                {preview ? (
-                  <DrawingCanvas
-                    preview={preview}
-                    selectedViewId={selectedViewId}
-                    busy={busy}
-                    toolbarPortal={drawingToolbarPortal}
-                    onSelectView={setSelectedViewId}
-                    onApplyCommands={applyCommands}
-                  />
-                ) : (
-                  <EmptyDrawingState onUpload={() => inputRef.current?.click()} busy={busy} />
-                )}
-              </CardContent>
-            </Card>
-          </main>
 
-          <aside className="min-w-0 xl:min-h-0 xl:overflow-hidden">
-            <Card className="h-full gap-0 overflow-hidden rounded-[8px] border-border/80 bg-card py-0 shadow-sm xl:min-h-0">
-              <CardHeader className="border-b px-4 py-3">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <CardTitle className="text-sm">3D Model</CardTitle>
-                  </div>
-                  <Badge variant="outline" className="rounded-[6px]">
-                    <Box className="size-3" />
-                    3D
-                  </Badge>
-                </div>
-                <div ref={setModelViewToolbarPortal} className={cn("min-h-8", !source?.imported && "hidden")} />
-              </CardHeader>
-              <CardContent className="min-h-0 p-0">
-                <div className="h-[320px] md:h-[420px] xl:h-full xl:min-h-[360px]">
-                  <StepViewer model={source?.imported ?? null} loading={loadingModel} viewToolbarPortal={modelViewToolbarPortal} />
-                </div>
-              </CardContent>
-              {source && source.viewerMode === "backend-fallback" ? (
-                <div className="border-t bg-amber-50 px-4 py-3 text-xs text-amber-900">
-                  Browser STEP import was not available for this file. The drawing sheet is shown from the backend preview, and the 3D viewer may be blank.
-                </div>
-              ) : null}
+                <TabsContent value="sheet" className="min-h-0 flex-1">
+                  <CardContent className="h-full min-h-0 p-2 md:p-3">
+                    {preview ? (
+                      <DrawingCanvas
+                        preview={preview}
+                        selectedViewId={selectedViewId}
+                        busy={busy}
+                        toolbarPortal={drawingToolbarPortal}
+                        onSelectView={setSelectedViewId}
+                        onApplyCommands={applyCommands}
+                      />
+                    ) : (
+                      <EmptyDrawingState onUpload={() => inputRef.current?.click()} busy={busy} />
+                    )}
+                  </CardContent>
+                </TabsContent>
+
+                <TabsContent value="model" className="min-h-0 flex-1">
+                  <CardContent className="h-full min-h-0 p-0">
+                    <StepViewer model={source?.imported ?? null} loading={loadingModel} viewToolbarPortal={modelViewToolbarPortal} />
+                    {source && source.viewerMode === "backend-fallback" ? (
+                      <div className="border-t bg-amber-50 px-4 py-2 text-xs text-amber-900">
+                        Browser STEP import unavailable — sheet is rendered server-side.
+                      </div>
+                    ) : null}
+                  </CardContent>
+                </TabsContent>
+              </Tabs>
             </Card>
-          </aside>
-        </div>
-      </SidebarInset>
-    </SidebarProvider>
+            {status ? (
+              <div className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
+                {busy ? <Loader2 className="size-3 animate-spin" /> : null}
+                <span className="truncate">{status}</span>
+              </div>
+            ) : null}
+          </div>
+        </SidebarInset>
+      </SidebarProvider>
+    </TooltipProvider>
   );
 }
 
 function WorkbenchSidebar({
   source,
   preview,
-  status,
   busy,
   loadingModel,
   savingPreview,
@@ -498,16 +497,13 @@ function WorkbenchSidebar({
 }: {
   source: LoadedSource | null;
   preview: DrawingPreview | null;
-  status: string;
   busy: boolean;
   loadingModel: boolean;
   savingPreview: boolean;
   inputRef: RefObject<HTMLInputElement | null>;
   scaleState: ScaleState;
 }) {
-  const { isMobile, toggleSidebar } = useSidebar();
-  const warningCount = preview?.validation.warnings.length ?? 0;
-  const errorCount = preview?.validation.errors.length ?? 0;
+  const { toggleSidebar } = useSidebar();
 
   return (
     <Sidebar collapsible="icon" variant="inset">
@@ -517,17 +513,13 @@ function WorkbenchSidebar({
             <SidebarMenuButton
               type="button"
               size="lg"
-              tooltip="AutoDrawing"
-              aria-label="Toggle AutoDrawing sidebar"
+              tooltip="Toggle sidebar"
+              aria-label="Toggle sidebar"
               className="gap-3 group-data-[collapsible=icon]:justify-center"
               onClick={toggleSidebar}
             >
               <div className="grid size-8 shrink-0 place-items-center rounded-[8px] bg-primary text-primary-foreground">
                 <SquareStack className="size-4" />
-              </div>
-              <div className="grid min-w-0 flex-1 text-left text-sm leading-tight group-data-[collapsible=icon]:hidden">
-                <span className="truncate font-semibold">AutoDrawing</span>
-                <span className="truncate text-xs text-sidebar-foreground/60">CAD workbench</span>
               </div>
             </SidebarMenuButton>
           </SidebarMenuItem>
@@ -536,50 +528,25 @@ function WorkbenchSidebar({
 
       <SidebarContent>
         <SidebarGroup>
-          <SidebarGroupLabel>Workspace</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
               <SidebarMenuItem>
                 <SidebarMenuButton
                   type="button"
-                  tooltip={loadingModel ? "Uploading model" : "Upload STEP or SLDPRT"}
+                  tooltip={loadingModel ? "Uploading" : "Upload model"}
                   onClick={() => inputRef.current?.click()}
                   disabled={busy}
                   isActive={!source}
                 >
                   {loadingModel ? <Loader2 className="animate-spin" /> : <Upload />}
-                  <span>{loadingModel ? "Working" : "Upload model"}</span>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-              <SidebarMenuItem>
-                <SidebarMenuButton type="button" tooltip="Drawing sheet" isActive={Boolean(preview)}>
-                  <Ruler />
-                  <span>Drawing sheet</span>
-                  {preview ? <SidebarPill>{preview.views.length}</SidebarPill> : null}
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-              <SidebarMenuItem>
-                <SidebarMenuButton type="button" tooltip="Model viewer" isActive={Boolean(source)}>
-                  <Layers3 />
-                  <span>Model viewer</span>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-              <SidebarMenuItem>
-                <SidebarMenuButton type="button" tooltip="Validation">
-                  <AlertTriangle />
-                  <span>Validation</span>
-                  {warningCount + errorCount > 0 ? <SidebarPill>{warningCount + errorCount}</SidebarPill> : null}
                 </SidebarMenuButton>
               </SidebarMenuItem>
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
 
-        <SidebarSeparator />
-
         {preview ? (
           <SidebarGroup>
-            <SidebarGroupLabel>Scale</SidebarGroupLabel>
             <SidebarGroupContent className="grid gap-2 group-data-[collapsible=icon]:hidden">
               <ScaleControl scaleState={scaleState} busy={busy} savingPreview={savingPreview} />
             </SidebarGroupContent>
@@ -593,24 +560,23 @@ function WorkbenchSidebar({
 
 function EmptyDrawingState({ onUpload, busy }: { onUpload: () => void; busy: boolean }) {
   return (
-    <div className="grid min-h-[420px] place-items-center rounded-[8px] border border-dashed bg-background text-center md:min-h-[calc(100vh-11rem)]">
-      <div className="grid max-w-md gap-4 px-6">
-        <div className="mx-auto grid size-12 place-items-center rounded-[8px] border bg-muted">
-          <FileInput className="size-5 text-muted-foreground" />
-        </div>
-        <div className="grid gap-2">
-          <p className="text-lg font-semibold">Load a model to open the sheet canvas</p>
-          <p className="text-sm text-muted-foreground">
-            The editor supports box selection, panning, zooming, linked view movement, title block edits, and direct sheet manipulation.
-          </p>
-        </div>
-        <div className="flex justify-center">
-          <Button type="button" className="rounded-[8px]" onClick={onUpload} disabled={busy}>
-            {busy ? <Loader2 className="animate-spin" /> : <Upload />}
-            Upload model
+    <div className="grid h-full min-h-[320px] place-items-center rounded-[8px] border border-dashed bg-background">
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            type="button"
+            size="icon"
+            variant="outline"
+            className="size-14 rounded-full"
+            onClick={onUpload}
+            disabled={busy}
+            aria-label="Upload model"
+          >
+            {busy ? <Loader2 className="size-5 animate-spin" /> : <Upload className="size-5" />}
           </Button>
-        </div>
-      </div>
+        </TooltipTrigger>
+        <TooltipContent>Upload STEP or SLDPRT</TooltipContent>
+      </Tooltip>
     </div>
   );
 }
@@ -688,23 +654,6 @@ function ScaleControl({
   );
 }
 
-function StatusNote({ status, busy }: { status: string; busy: boolean }) {
-  return (
-    <div className="flex items-start gap-2 rounded-[8px] border bg-background p-3 text-xs text-muted-foreground">
-      {busy ? <Loader2 className="mt-0.5 size-3.5 shrink-0 animate-spin" /> : <CircleDot className="mt-0.5 size-3.5 shrink-0" />}
-      <span className="min-w-0">{status}</span>
-    </div>
-  );
-}
-
-function SidebarPill({ children }: { children: string | number }) {
-  return (
-    <span className="ml-auto rounded-[6px] border bg-background px-1.5 text-[10px] font-medium text-muted-foreground group-data-[collapsible=icon]:hidden">
-      {children}
-    </span>
-  );
-}
-
 function formatScaleRatio(scale: number) {
   if (scale >= 1) {
     return `${formatRatioNumber(scale)}:1`;
@@ -714,15 +663,4 @@ function formatScaleRatio(scale: number) {
 
 function formatRatioNumber(value: number) {
   return Number.isInteger(value) ? String(value) : value.toFixed(2);
-}
-
-function MetricRow({ label, value, metric }: { label: string; value: string; metric?: string }) {
-  return (
-    <div className="flex min-w-0 items-center justify-between gap-3 rounded-[6px] border bg-card px-2.5 py-1.5 text-xs">
-      <span className="shrink-0 text-muted-foreground">{label}</span>
-      <span className="min-w-0 truncate font-medium text-foreground" data-view-metric={metric}>
-        {value}
-      </span>
-    </div>
-  );
 }

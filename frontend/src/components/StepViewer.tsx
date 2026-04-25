@@ -353,56 +353,53 @@ export function StepViewer({ model, loading = false, viewToolbarPortal }: StepVi
   }
 
   const viewPresetToolbar = stats ? (
-    <div className="grid gap-1.5">
-      <div className="flex w-full items-center gap-1 overflow-x-auto rounded-[8px] border bg-background/95 p-1 text-xs shadow-sm backdrop-blur">
-        <button
-          type="button"
-          title={showHelpers ? "Hide grid and axes" : "Show grid and axes"}
-          aria-label="Toggle grid and axes"
-          aria-pressed={showHelpers}
-          onClick={() => setShowHelpers((value) => !value)}
-          className={
-            "grid h-7 w-7 shrink-0 place-items-center rounded-[6px] transition " +
-            (showHelpers ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-accent hover:text-accent-foreground")
-          }
-        >
-          <Axis3d className="size-3.5" />
-        </button>
-        {VIEW_MODES.map((mode) => {
-          const Icon = mode.icon;
-          const active = viewMode === mode.id;
-          return (
-            <button
-              key={mode.id}
-              type="button"
-              title={mode.label}
-              aria-label={mode.label}
-              aria-pressed={active}
-              onClick={() => setViewMode(mode.id)}
-              className={
-                "grid h-7 w-7 shrink-0 place-items-center rounded-[6px] transition " +
-                (active ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-accent hover:text-accent-foreground")
-              }
-            >
-              <Icon className="size-3.5" />
-            </button>
-          );
-        })}
-      </div>
-      <div className="flex w-full flex-wrap items-center gap-1 rounded-[8px] border bg-background/95 p-1 text-xs shadow-sm backdrop-blur">
-        {VIEW_PRESETS.map((preset) => (
+    <div className="flex items-center gap-1 overflow-x-auto rounded-[8px] border bg-background/95 p-1 text-xs shadow-sm backdrop-blur">
+      <button
+        type="button"
+        title={showHelpers ? "Hide grid and axes" : "Show grid and axes"}
+        aria-label="Toggle grid and axes"
+        aria-pressed={showHelpers}
+        onClick={() => setShowHelpers((value) => !value)}
+        className={
+          "grid h-7 w-7 shrink-0 place-items-center rounded-[6px] transition " +
+          (showHelpers ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-accent hover:text-accent-foreground")
+        }
+      >
+        <Axis3d className="size-3.5" />
+      </button>
+      {VIEW_MODES.map((mode) => {
+        const Icon = mode.icon;
+        const active = viewMode === mode.id;
+        return (
           <button
-            key={preset.id}
+            key={mode.id}
             type="button"
-            title={preset.label}
-            aria-label={`View ${preset.label}`}
-            onClick={() => applyPreset(preset)}
-            className="h-7 shrink-0 rounded-[6px] px-2.5 font-medium text-muted-foreground transition hover:bg-accent hover:text-accent-foreground"
+            title={mode.label}
+            aria-label={mode.label}
+            aria-pressed={active}
+            onClick={() => setViewMode(mode.id)}
+            className={
+              "grid h-7 w-7 shrink-0 place-items-center rounded-[6px] transition " +
+              (active ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-accent hover:text-accent-foreground")
+            }
           >
-            {preset.label}
+            <Icon className="size-3.5" />
           </button>
-        ))}
-      </div>
+        );
+      })}
+      <div className="mx-1 h-4 w-px shrink-0 bg-border" />
+      {VIEW_PRESETS.map((preset) => (
+        <button
+          key={preset.id}
+          type="button"
+          title={preset.label}
+          aria-label={`View ${preset.label}`}
+          onClick={() => applyPreset(preset)}
+          className="h-7 shrink-0 rounded-[6px] px-2.5 font-medium text-muted-foreground transition hover:bg-accent hover:text-accent-foreground"
+        >
+          {preset.label}
+        </button>
+      ))}
     </div>
   ) : null;
 
